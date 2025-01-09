@@ -31,6 +31,8 @@ class TestOverlay:
             id="1_0",
             parent=traj,
         )
+        # make sure traj ids are clean and not timestamped:
+        assert intersections.get_trajectory("1_0").df.traj_id.unique() == ["1_0"]
 
     def test_clip_no_node_in_poly(self):
         polygon = Polygon([(1, -5), (2, -5), (2, 8), (1, 8), (1, -5)])
@@ -226,7 +228,7 @@ class TestOverlay:
             "1_0"
         )
         assert len(intersection.df.columns) == len(
-            ["geometry", "value", "intersecting_id", "intersecting_name"]
+            ["geometry", "value", "traj_id", "intersecting_id", "intersecting_name"]
         )
         assert intersection.df.iloc[0]["intersecting_id"] == 1
         assert intersection.df.iloc[0]["intersecting_name"] == "foo"

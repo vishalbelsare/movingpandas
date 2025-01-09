@@ -3,8 +3,23 @@
 from pandas import concat
 from copy import copy
 from geopandas import GeoDataFrame
-from .trajectory import Trajectory
-from .trajectory_plotter import _TrajectoryCollectionPlotter
+from .trajectory import (
+    Trajectory,
+    SPEED_COL_NAME,
+    DIRECTION_COL_NAME,
+    DISTANCE_COL_NAME,
+    ACCELERATION_COL_NAME,
+    ANGULAR_DIFFERENCE_COL_NAME,
+    TIMEDELTA_COL_NAME,
+)
+from .trajectory_plotter import _TrajectoryPlotter
+from .unit_utils import UNITS
+from .io import gdf_to_mf_json
+
+
+@staticmethod
+def traj_to_tc(traj):
+    return TrajectoryCollection([traj])
 
 
 class TrajectoryCollection:
@@ -41,8 +56,10 @@ class TrajectoryCollection:
         crs : string
             CRS of the x/y coordinates
         min_length : numeric
-            Desired minimum length of trajectories. (Shorter trajectories are
-            discarded.)
+            Desired minimum length of trajectories. Length is calculated using
+            CRS units, except if the CRS is geographic (e.g. EPSG:4326 WGS84)
+            then length is calculated in meters.
+            (Shorter trajectories are discarded.)
         min_duration : timedelta
             Desired minimum duration of trajectories. (Shorter trajectories are
             discarded.)
@@ -57,6 +74,7 @@ class TrajectoryCollection:
         """
         self.min_length = min_length
         self.min_duration = min_duration
+        self.t = t
         if type(data) == list:
             self.trajectories = [
                 traj for traj in data if traj.get_length() >= min_length
@@ -76,7 +94,7 @@ class TrajectoryCollection:
         return len(self.trajectories)
 
     def __str__(self):
-        return "TrajectoryCollection with {} trajectories".format(self.__len__())
+        return f"TrajectoryCollection with {self.__len__()} trajectories"
 
     def __repr__(self):
         return self.__str__()
@@ -112,6 +130,18 @@ class TrajectoryCollection:
         # already preprocessed on __init__().
         return TrajectoryCollection(trajectories, min_length=self.min_length)
 
+    def drop(self, **kwargs):
+        """
+        Drop columns or rows from the trajectories' DataFrames
+
+        Examples
+        --------
+
+        >>> tc.drop(columns=['abc','def'])
+        """
+        for traj in self.trajectories:
+            traj.drop(**kwargs)
+
     def to_point_gdf(self):
         """
         Return the trajectories' points as GeoDataFrame.
@@ -123,7 +153,7 @@ class TrajectoryCollection:
         gdfs = [traj.to_point_gdf() for traj in self.trajectories]
         return concat(gdfs)
 
-    def to_line_gdf(self):
+    def to_line_gdf(self, columns=None):
         """
         Return the trajectories' line segments as GeoDataFrame.
 
@@ -131,7 +161,7 @@ class TrajectoryCollection:
         -------
         GeoDataFrame
         """
-        gdfs = [traj.to_line_gdf() for traj in self.trajectories]
+        gdfs = [traj.to_line_gdf(columns) for traj in self.trajectories]
         gdf = concat(gdfs)
         gdf.reset_index(drop=True, inplace=True)
         return gdf
@@ -150,6 +180,30 @@ class TrajectoryCollection:
         gdf.reset_index(drop=True, inplace=True)
         return gdf
 
+    def to_mf_json(self, datetime_to_str=True, temporal_columns=None):
+        """
+        Converts a TrajectoryCollection to a dictionary compatible with the Moving
+        Features JSON (MF-JSON) specification.
+
+        Examples
+        --------
+
+        >>> tc.to_mf_json()
+
+        Returns:
+            dict: The MF-JSON representation of the GeoDataFrame as a dictionary.
+        """
+        tmp = self.to_point_gdf()
+        t = tmp.index.name
+        mf_json = gdf_to_mf_json(
+            tmp.reset_index(),
+            self.get_traj_id_col(),
+            t,
+            datetime_to_str=datetime_to_str,
+            temporal_columns=temporal_columns,
+        )
+        return mf_json
+
     def _df_to_trajectories(self, df, traj_id_col, obj_id_col, t, x, y, crs):
         trajectories = []
         for traj_id, values in df.groupby(traj_id_col):
@@ -160,7 +214,14 @@ class TrajectoryCollection:
             else:
                 obj_id = None
             trajectory = Trajectory(
-                values, traj_id, obj_id=obj_id, t=t, x=x, y=y, crs=crs
+                values,
+                traj_id,
+                traj_id_col=traj_id_col,
+                obj_id=obj_id,
+                t=t,
+                x=x,
+                y=y,
+                crs=crs,
             )
             if self.min_duration:
                 if trajectory.get_duration() < self.min_duration:
@@ -194,7 +255,58 @@ class TrajectoryCollection:
             if traj.id == traj_id:
                 return traj
 
-    def get_geom_column_name(self):
+    def get_trajectories(self, obj_id):
+        """
+        Return the trajectories of the requested moving object
+
+        Parameters
+        ----------
+        obj_id : any
+            Moving object ID
+
+        Returns
+        -------
+        TrajectoryCollection
+        """
+        trajs = []
+        for traj in self:
+            if traj.obj_id == obj_id:
+                trajs.append(traj)
+        return TrajectoryCollection(trajs)
+
+    def get_crs(self):
+        """
+        Return the CRS of the trajectories
+        """
+        return self.trajectories[0].get_crs()
+
+    def is_latlon(self):
+        """
+        Return True if the trajectory CRS is geographic (e.g. EPSG:4326 WGS84)
+        """
+        return self.trajectories[0].is_latlon()
+
+    def get_column_names(self):
+        """
+        Return the list of column names
+
+        Returns
+        -------
+        list
+        """
+        return self.trajectories[0].df.columns
+
+    def get_traj_id_col(self):
+        """
+        Return name of the trajectory ID column
+
+        Returns
+        -------
+        string
+        """
+        return self.trajectories[0].get_traj_id_col()
+
+    def get_geom_col(self):
         """
         Return name of the geometry column
 
@@ -202,9 +314,29 @@ class TrajectoryCollection:
         -------
         string
         """
-        return self.trajectories[0].get_geom_column_name()
+        return self.trajectories[0].get_geom_col()
 
-    def get_locations_at(self, t):
+    def get_speed_col(self):
+        """
+        Return name of the speed column
+
+        Returns
+        -------
+        string
+        """
+        return self.trajectories[0].get_speed_col()
+
+    def get_direction_col(self):
+        """
+        Return name of the direction column
+
+        Returns
+        -------
+        string
+        """
+        return self.trajectories[0].get_direction_col()
+
+    def get_locations_at(self, t, with_direction=False):
         """
         Returns GeoDataFrame with trajectory locations at the specified timestamp
 
@@ -219,24 +351,47 @@ class TrajectoryCollection:
             Trajectory locations at timestamp t
         """
         result = []
+
+        if with_direction:
+            direction_col = self.get_direction_col()
+            direction_missing = direction_col not in self.get_column_names()
+
         for traj in self:
-            x = None
             if t == "start":
-                x = traj.get_row_at(traj.get_start_time())
+                tmp = traj.copy()
+                if with_direction and direction_missing:
+                    tmp.df = tmp.df.head(2)
+                    tmp.add_direction(name=direction_col)
+                x = tmp.get_row_at(tmp.get_start_time())
             elif t == "end":
-                x = traj.get_row_at(traj.get_end_time())
+                tmp = traj.copy()
+                if with_direction and direction_missing:
+                    tmp.df = tmp.df.tail(2)
+                    tmp.add_direction(name=direction_col)
+                x = tmp.get_row_at(tmp.get_end_time())
             else:
                 if t < traj.get_start_time() or t > traj.get_end_time():
                     continue
-                x = traj.get_row_at(t)
+                tmp = traj.copy()
+                if with_direction and direction_missing:
+                    tmp.add_direction(name=direction_col)
+                x = tmp.get_row_at(t)
             result.append(x.to_frame().T)
-        if result:
-            df = concat(result, ignore_index=True)
-            return GeoDataFrame(df)
-        else:
-            return GeoDataFrame()
 
-    def get_start_locations(self):
+        if result:
+            df = concat(result)
+            # Move temporal index to column t
+            t = self.t or "t"
+            df.reset_index(inplace=True)
+            df.rename(columns={"index": t}, inplace=True)
+
+            gdf = GeoDataFrame(df)
+            gdf.set_crs(self.get_crs(), inplace=True)
+        else:
+            gdf = GeoDataFrame()
+        return gdf
+
+    def get_start_locations(self, with_direction=False):
         """
         Returns GeoDataFrame with trajectory start locations
 
@@ -245,9 +400,9 @@ class TrajectoryCollection:
         GeoDataFrame
             Trajectory start locations
         """
-        return self.get_locations_at("start")
+        return self.get_locations_at("start", with_direction)
 
-    def get_end_locations(self):
+    def get_end_locations(self, with_direction=False):
         """
         Returns GeoDataFrame with trajectory end locations
 
@@ -256,7 +411,7 @@ class TrajectoryCollection:
         GeoDataFrame
             Trajectory end locations
         """
-        return self.get_locations_at("end")
+        return self.get_locations_at("end", with_direction)
 
     def get_segments_between(self, t1, t2):
         """
@@ -311,6 +466,42 @@ class TrajectoryCollection:
         result.trajectories = intersecting
         return result
 
+    def intersection(self, feature, point_based=False):
+        """
+        Intersect trajectories with the given polygon feature.
+
+        Feature attributes are appended to the trajectory's DataFrame.
+
+        By default, the trajectory's line representation is clipped by the
+        polygon. If pointbased=True, the trajectory's point representation is
+        used instead, leading to shorter segments.
+
+        Parameters
+        ----------
+        feature : shapely Feature
+            Feature to intersect with
+        point_based : bool
+            Clipping method
+
+        Returns
+        -------
+        TrajectoryCollection
+            Intersecting trajectory segments
+        """
+        intersections = []
+        for traj in self:
+            try:
+                for intersect in traj.intersection(feature, point_based):
+                    if (
+                        intersect.get_length() >= self.min_length
+                    ):  # TODO also test min_duration
+                        intersections.append(intersect)
+            except:  # noqa E722
+                pass
+        result = copy(self)
+        result.trajectories = intersections
+        return result
+
     def clip(self, polygon, point_based=False):
         """
         Clip trajectories by the given polygon.
@@ -331,7 +522,10 @@ class TrajectoryCollection:
         for traj in self:
             try:
                 for intersect in traj.clip(polygon, point_based):
-                    clipped.append(intersect)
+                    if (
+                        intersect.get_length() >= self.min_length
+                    ):  # TODO also test min_duration
+                        clipped.append(intersect)
             except:  # noqa E722
                 pass
         result = copy(self)
@@ -375,7 +569,9 @@ class TrajectoryCollection:
         result.trajectories = filtered
         return result
 
-    def add_speed(self, overwrite=False):
+    def add_speed(
+        self, overwrite=False, name=SPEED_COL_NAME, units=UNITS(), n_threads=1
+    ):
         """
         Add speed column and values to the trajectories.
 
@@ -386,11 +582,49 @@ class TrajectoryCollection:
         ----------
         overwrite : bool
             Whether to overwrite existing speed values (default: False)
-        """
-        for traj in self:
-            traj.add_speed(overwrite)
+        name : str
+            Name of the speed column (default: speed)
+        units : tuple(str)
+            Units in which to calculate speed
 
-    def add_direction(self, overwrite=False):
+            distance : str
+                Abbreviation for the distance unit
+                (default: CRS units, or metres if geographic)
+            time : str
+                Abbreviation for the time unit (default: seconds)
+
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
+        n_threads : int
+            Number of threads to use for computation (default: 1)
+        """
+        if n_threads <= 1:
+            self._add_speed(self.trajectories, name, units, overwrite)
+        else:
+            self._multithread(self._add_speed, n_threads, name, units, overwrite)
+        return self
+
+    def _add_speed(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_speed(name=name, units=units, overwrite=overwrite)
+        return trajs
+
+    def _multithread(self, fun, n_threads, name, units, overwrite):
+        from multiprocessing import Pool
+        from itertools import repeat
+        from movingpandas.tools._multi_threading import split_list
+
+        p = Pool(int(n_threads))
+        data = split_list(self.trajectories, n_threads)
+        self.trajectories = []
+        args_iter = zip(data, repeat(name), repeat(units), repeat(overwrite))
+        results = []
+        for added in p.starmap(fun, args_iter):
+            results.extend(added)
+        self.trajectories = results
+        return results
+
+    def add_direction(self, overwrite=False, name=DIRECTION_COL_NAME, n_threads=1):
         """
         Add direction column and values to the trajectories.
 
@@ -401,13 +635,33 @@ class TrajectoryCollection:
         ----------
         overwrite : bool
             Whether to overwrite existing direction values (default: False)
+        name : str
+            Name of the direction column (default: "direction")
+        n_threads : int
+            Number of threads to use for computation (default: 1)
         """
-        for traj in self:
-            traj.add_direction(overwrite)
+        if n_threads <= 1:
+            self._add_direction(self.trajectories, name, UNITS(), overwrite)
+        else:
+            self._multithread(
+                self._add_direction,
+                n_threads,
+                name,
+                UNITS(),
+                overwrite,
+            )
+        return self
 
-    def add_angular_difference(self, overwrite=False):
+    def _add_direction(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_direction(overwrite=overwrite, name=name)
+        return trajs
+
+    def add_angular_difference(
+        self, overwrite=False, name=ANGULAR_DIFFERENCE_COL_NAME, n_threads=1
+    ):
         """
-        Add angular difference to the trajectories.
+        Add angular difference to the trajectory's DataFrame.
 
         Angular difference is calculated as the absolute smaller angle
         between direction for points along the trajectory.
@@ -417,11 +671,27 @@ class TrajectoryCollection:
         ----------
         overwrite : bool
             Whether to overwrite existing angular difference values (default: False)
+        name : str
+            Name of the angular_difference column (default: "angular_difference")
+        n_threads : int
+            Number of threads to use for computation (default: 1)
         """
-        for traj in self:
-            traj.add_angular_difference(overwrite)
+        if n_threads <= 1:
+            self._add_angular_difference(self.trajectories, name, UNITS(), overwrite)
+        else:
+            self._multithread(
+                self._add_angular_difference, n_threads, name, UNITS(), overwrite
+            )
+        return self
 
-    def add_acceleration(self, overwrite=False):
+    def _add_angular_difference(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_angular_difference(overwrite=overwrite, name=name)
+        return trajs
+
+    def add_acceleration(
+        self, overwrite=False, name=ACCELERATION_COL_NAME, units=UNITS(), n_threads=1
+    ):
         """
         Add acceleration column and values to the trajectories.
 
@@ -433,9 +703,91 @@ class TrajectoryCollection:
         ----------
         overwrite : bool
             Whether to overwrite existing acceleration values (default: False)
+        name : str
+            Name of the acceleration column (default: "acceleration")
+        units : tuple(str)
+            Units in which to calculate acceleration
+
+            distance : str
+                Abbreviation for the distance unit
+                (default: CRS units, or metres if geographic)
+            time : str
+                Abbreviation for the time unit (default: seconds)
+            time2 : str
+                Abbreviation for the second time unit (default: seconds)
+
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
+        n_threads : int
+            Number of threads to use for computation (default: 1)
         """
-        for traj in self:
-            traj.add_acceleration(overwrite)
+        if n_threads <= 1:
+            self._add_acceleration(self.trajectories, name, units, overwrite)
+        else:
+            self._multithread(self._add_acceleration, n_threads, name, units, overwrite)
+        return self
+
+    def _add_acceleration(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_acceleration(overwrite=overwrite, name=name, units=units)
+        return trajs
+
+    def add_distance(
+        self, overwrite=False, name=DISTANCE_COL_NAME, units=None, n_threads=1
+    ):
+        """
+        Add distance column and values to the trajectories.
+
+        Parameters
+        ----------
+        overwrite : bool
+            Whether to overwrite existing distance values (default: False)
+        name : str
+            Name of the distance column (default: "distance")
+        units : str
+            Units in which to calculate distance values (default: CRS units)
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
+        n_threads : int
+            Number of threads to use for computation (default: 1)
+        """
+        if n_threads <= 1:
+            self._add_distance(self.trajectories, name, units, overwrite)
+        else:
+            self._multithread(self._add_distance, n_threads, name, units, overwrite)
+        return self
+
+    def _add_distance(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_distance(overwrite=overwrite, name=name, units=units)
+        return trajs
+
+    def add_timedelta(self, overwrite=False, name=TIMEDELTA_COL_NAME, n_threads=1):
+        """
+        Add timedelta column and values to the trajectories.
+
+        Timedelta is calculated as the time difference between the current
+        and the previous row. Values are instances of datetime.timedelta.
+
+        Parameters
+        ----------
+        overwrite : bool
+            Whether to overwrite existing timedelta values (default: False)
+        name : str
+            Name of the timedelta column (default: "timedelta")
+        n_threads : int
+            Number of threads to use for computation (default: 1)
+        """
+        if n_threads <= 1:
+            self._add_timedelta(self.trajectories, name, UNITS(), overwrite)
+        else:
+            self._multithread(self._add_timedelta, n_threads, name, UNITS(), overwrite)
+        return self
+
+    def _add_timedelta(self, trajs, name, units, overwrite):
+        for traj in trajs:
+            traj.add_timedelta(overwrite=overwrite, name=name)
+        return trajs
 
     def add_traj_id(self, overwrite=False):
         """
@@ -448,6 +800,7 @@ class TrajectoryCollection:
         """
         for traj in self:
             traj.add_traj_id(overwrite)
+        return self
 
     def get_min(self, column):
         """
@@ -497,12 +850,41 @@ class TrajectoryCollection:
         Plot speed along trajectories (with legend and specified figure size):
 
         >>> trajectory_collection.plot(column='speed', legend=True, figsize=(9,5))
+
+        Plot speed along trajectories (scaling the colormap to specific min/max values):
+
+        >>> trajectory_collection.plot(column='speed', vmin=0, vmax=20)
         """
-        return _TrajectoryCollectionPlotter(self, *args, **kwargs).plot()
+        return _TrajectoryPlotter(self, *args, **kwargs).plot()
+
+    def explore(self, *args, **kwargs):
+        """
+        Generate a plot using GeoPandas explore (folium/leaflet.js)
+        https://geopandas.org/en/stable/docs/reference/api/geopandas.GeoDataFrame.explore.html
+
+        Parameters
+        ----------
+        args :
+            These parameters will be passed to GeoPandas explore
+        kwargs :
+            These parameters will be passed to GeoPandas explore
+
+        Returns
+        -------
+        m : folium.folium.Map
+            folium Map instance
+
+        Examples
+        --------
+        Plot speed along trajectory (with legend and specified figure size):
+
+        >>> trajectory_collection.explore(column='speed', vmax=20, tiles="CartoDB positron")
+        """  # noqa: E501
+        return _TrajectoryPlotter(self, *args, **kwargs).explore()
 
     def hvplot(self, *args, **kwargs):
         """
-        Generate an interactive plot.
+        Generate an interactive trajectory plot.
 
         Parameters
         ----------
@@ -511,14 +893,43 @@ class TrajectoryCollection:
         kwargs :
             These parameters will be passed to the TrajectoryPlotter
 
+            To customize the plots, check the list of supported colormaps:
+            https://holoviews.org/user_guide/Colormaps.html#available-colormaps
+
         Examples
         --------
         Plot speed along trajectories (with legend and specified figure size):
 
         >>> collection.hvplot(c='speed', line_width=7.0, width=700, height=400,
                               colorbar=True)
+
+        Plot speed along trajectories (scaling the colormap to specific min/max values):
+
+        >>> trajectory_collection.plot(column='speed', clim=(0,20))
+        """  # noqa: E501
+        return _TrajectoryPlotter(self, *args, **kwargs).hvplot()
+
+    def hvplot_pts(self, *args, **kwargs):
         """
-        return _TrajectoryCollectionPlotter(self, *args, **kwargs).hvplot()
+        Generate an interactive plot of trajectory points.
+
+        Parameters
+        ----------
+        args :
+            These parameters will be passed to the TrajectoryPlotter
+        kwargs :
+            These parameters will be passed to the TrajectoryPlotter
+
+            To customize the plots, check the list of supported colormaps:
+            https://holoviews.org/user_guide/Colormaps.html#available-colormaps
+
+        Examples
+        --------
+        Plot points colored by speed (with legend and specified figure size):
+
+        >>> collection.hvplot_pts(c='speed', width=700, height=400, colorbar=True)
+        """  # noqa: E501
+        return _TrajectoryPlotter(self, *args, **kwargs).hvplot_pts()
 
 
 def _get_location_at(traj, t, columns=None):

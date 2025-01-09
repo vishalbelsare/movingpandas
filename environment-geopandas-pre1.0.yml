@@ -1,12 +1,10 @@
-name: mpd-mini
+name: mpd-gpd-1.0
 channels:
   - conda-forge
 dependencies:
   - python=3.10
-  - geopandas-base
   - matplotlib-base
   - geopy
-  - pyogrio
   - pytest
   - pytest-cov
-  - pyproj
+  - geopandas=0.14.4

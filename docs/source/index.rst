@@ -1,32 +1,16 @@
-Welcome to MovingPandas's documentation!
-========================================
+MovingPandas Documentation
+==========================
 
-MovingPandas implements trajectory classes and functions built on top of GeoPandas.
+MovingPandas is a Python library for movement data exploration and analysis.
 
-The project home is: http://movingpandas.org
-
-The code repository is: https://github.com/anitagraser/movingpandas
-
-Extensive analysis examples are available from: https://github.com/anitagraser/movingpandas-examples
-
-MovingPandas classes
---------------------
+MovingPandas provides trajectory data structures and functions for handling movement data based on Pandas, GeoPandas, and HoloViz.
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
-   trajectory
-   trajectorycollection
-   trajectorygeneralizer
-   trajectoryaggregator
-   trajectorysplitter
-   trajectorystopdetector
-   trajectorysmoother
-   trajectorycleaner
+   API reference <api/api>
+  
 
+Looking for the project home? Head over to: http://movingpandas.org
 
-All Functions
---------------
-
-* :ref:`genindex`
-
+Looking for tutorials & examples? See: https://movingpandas.org/examples

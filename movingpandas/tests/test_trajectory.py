@@ -6,7 +6,7 @@ from pandas.testing import assert_frame_equal
 from geopandas import GeoDataFrame
 from shapely.geometry import Point, LineString
 from datetime import datetime, timedelta
-from fiona.crs import from_epsg
+from pyproj import CRS
 from movingpandas.trajectory import (
     Trajectory,
     DIRECTION_COL_NAME,
@@ -19,11 +19,17 @@ from movingpandas.trajectory import (
 )
 from movingpandas.unit_utils import MissingCRSWarning
 
-from . import requires_holoviews, has_holoviews
+from . import (
+    requires_holoviews,
+    has_holoviews,
+    requires_folium,
+    has_geopandas1,
+    requires_geopandas1,
+)
 
 
-CRS_METRIC = from_epsg(31256)
-CRS_LATLON = from_epsg(4326)
+CRS_METRIC = CRS.from_user_input(31256)
+CRS_LATLON = CRS.from_user_input(4326)
 
 
 def assert_frame_not_equal(*args, **kwargs):
@@ -269,7 +275,9 @@ class TestTrajectory:
 
     def test_add_traj_id(self):
         traj = self.default_traj_metric
-        traj.add_traj_id()
+        with pytest.raises(RuntimeError):
+            traj.add_traj_id()
+        traj.add_traj_id(overwrite=True)
         assert traj.df[TRAJ_ID_COL_NAME].tolist() == [1, 1, 1]
 
     def test_add_traj_id_overwrite_raises_error(self):
@@ -474,6 +482,19 @@ class TestTrajectory:
         traj = traj.clip(area_of_interest).get_trajectory("1_0")
         traj.add_speed()
         traj.add_speed(overwrite=True)
+
+    def test_add_speed_with_nanoseconds(self):
+        import numpy as np
+
+        start_time = pd.Timestamp.now() + pd.Timedelta(nanoseconds=10)
+        timedeltas = np.arange(10) * pd.Timedelta(seconds=0.2)
+        timestamps = start_time + timedeltas
+        df = pd.DataFrame({"datetime": timestamps})
+        df["x"] = np.arange(0, 10) * 100
+        df["y"] = np.arange(0, 10) * 100
+        traj = Trajectory(df, traj_id=1, t="datetime", y="y", x="x", crs="epsg:32632")
+        traj.add_speed()
+        assert len(traj.df) == 10
 
     def test_add_acceleration(self):
         traj = make_traj([Node(0, 0), Node(6, 0, second=1), Node(18, 0, second=2)])
@@ -708,16 +729,19 @@ class TestTrajectory:
         result = make_traj([Node(0, 1), Node(6, 5, day=2)], CRS_LATLON).get_bbox()
         assert result == (0, 1, 6, 5)  # (minx, miny, maxx, maxy)
 
+    def test_get_length(self):
+        traj = make_traj([Node(0, 1), Node(0, 6, day=2)], CRS_METRIC)
+        assert traj.get_length() == 5
+        # assert len(traj) == pytest.approx(5, 1)
+
     def test_get_length_spherical(self):
-        result = (
-            make_traj([Node(0, 1), Node(6, 0, day=2)], CRS_LATLON).get_length() / 1000
-        )
+        traj = make_traj([Node(0, 1), Node(6, 0, day=2)], CRS_LATLON)
+        result = traj.get_length() / 1000
         assert result == pytest.approx(676.3, 1)
 
     def test_get_length_spherical_units(self):
-        result = make_traj([Node(0, 1), Node(6, 0, day=2)], CRS_LATLON).get_length(
-            units="km"
-        )
+        traj = make_traj([Node(0, 1), Node(6, 0, day=2)], CRS_LATLON)
+        result = traj.get_length(units="km")
         assert result == pytest.approx(676.3, 1)
 
     def test_get_length_euclidiean(self):
@@ -771,21 +795,53 @@ class TestTrajectory:
         plot = self.default_traj_metric.plot()
         assert isinstance(plot, Axes)
 
+    @requires_folium
+    def test_explore_exists(self):
+        from folium.folium import Map
+
+        if has_geopandas1:
+            plot = self.default_traj_metric.explore()
+            assert isinstance(plot, Map)
+        else:
+            with pytest.raises(NotImplementedError):
+                plot = self.default_traj_metric.explore()
+
     @requires_holoviews
     def test_hvplot_exists(self):
         import holoviews
 
-        plot = self.default_traj_latlon.hvplot(geo=True)
+        plot = self.default_traj_latlon.hvplot()
         assert isinstance(plot, holoviews.core.overlay.Overlay)
         assert len(plot.Path.ddims) == 2
+
+        plot = self.default_traj_latlon.hvplot(color="red")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.default_traj_latlon.hvplot(c="traj_id")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.default_traj_latlon.hvplot(c="traj_id", colormap={1: "red"})
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.default_traj_latlon.hvplot_pts()
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.default_traj_latlon.hvplot_pts(color="red")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
 
     @requires_holoviews
     def test_hvplot_with_speed_exists(self):
         import holoviews
 
-        plot = self.default_traj_latlon.hvplot(geo=True, c="speed")
+        plot = self.default_traj_latlon.hvplot(c="speed")
         assert isinstance(plot, holoviews.core.overlay.Overlay)
         assert len(plot.Path.ddims) == 3
+
+        plot = self.default_traj_latlon.hvplot(c="speed", cmap="Reds")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.default_traj_latlon.hvplot_pts(c="speed")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
 
     @requires_holoviews
     def test_hvplot_exists_without_crs(self):
@@ -816,6 +872,13 @@ class TestTrajectory:
         traj.plot(column="speed")
         assert_frame_equal(self.default_traj_metric.df, traj.df)
 
+    @requires_geopandas1
+    @requires_folium
+    def test_explore_does_not_alter_df(self):
+        traj = self.default_traj_metric.copy()
+        traj.explore(column="speed")
+        assert_frame_equal(self.default_traj_metric.df, traj.df)
+
     def test_linestringbetween_does_not_alter_df(self):
         traj = self.default_traj_metric.copy()
         traj.get_linestring_between(
@@ -827,6 +890,14 @@ class TestTrajectory:
         traj = self.default_traj_metric.copy()
         traj.get_position_at(datetime(1970, 1, 1, 0, 0, 2), method="nearest")
         assert_frame_equal(self.default_traj_metric.df, traj.df)
+
+    @requires_geopandas1
+    @requires_folium
+    def test_explore_speed(self):
+        from folium.folium import Map
+
+        result = self.default_traj_metric.explore(column="speed")
+        assert isinstance(result, Map)
 
     @requires_holoviews
     def test_support_for_subclasses_of_point(self):
@@ -923,11 +994,13 @@ class TestTrajectory:
         df2 = pd.DataFrame(
             [
                 {
+                    "traj_id": 1,
                     "t": datetime(2018, 1, 1, 12, 6, 0),
                     "prev_t": datetime(2018, 1, 1, 12, 0, 0),
                     "geometry": LineString([(0, 0), (6, 0)]),
                 },
                 {
+                    "traj_id": 1,
                     "t": datetime(2018, 1, 1, 12, 10, 0),
                     "prev_t": datetime(2018, 1, 1, 12, 6, 0),
                     "geometry": LineString([(6, 0), (6, 6)]),
@@ -969,6 +1042,20 @@ class TestTrajectory:
         expected_line_gdf_wkt = GeoDataFrame(df2, crs=CRS_METRIC)
 
         assert_frame_equal(traj_gdf_wkt, expected_line_gdf_wkt)
+
+    def test_to_mf_json_tostr(self):
+        json = self.default_traj_metric.to_mf_json()
+        assert (
+            str(json)
+            == """{'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'properties': {'traj_id': 1, 'value': 1}, 'temporalGeometry': {'type': 'MovingPoint', 'coordinates': [(0.0, 0.0), (6.0, 0.0), (10.0, 0.0)], 'datetimes': ['1970-01-01 00:00:00', '1970-01-01 00:00:10', '1970-01-01 00:00:20']}}]}"""  # noqa F401
+        )
+
+    def test_to_mf_json(self):
+        json = self.default_traj_metric.to_mf_json(datetime_to_str=False)
+        assert (
+            str(json)
+            == """{'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'properties': {'traj_id': 1, 'value': 1}, 'temporalGeometry': {'type': 'MovingPoint', 'coordinates': [(0.0, 0.0), (6.0, 0.0), (10.0, 0.0)], 'datetimes': [Timestamp('1970-01-01 00:00:00'), Timestamp('1970-01-01 00:00:10'), Timestamp('1970-01-01 00:00:20')]}}]}"""  # noqa F401
+        )
 
     def test_error_due_to_wrong_gdf_index(self):
         with pytest.raises(TypeError):
@@ -1037,9 +1124,9 @@ class TestTrajectory:
 
         traj = make_traj([Node(0, 0, day=1), Node(1, 1, day=2), Node(2, 2, day=3)])
         point = Point(0, 0)
-        assert traj.hausdorff_distance(point, units="km") == sqrt(4 + 4) / 1000.0
+        assert traj.hausdorff_distance(point, units="km") == sqrt(4 + 4) / 1000
         line = LineString([(2, 0), (2, 4), (3, 4)])
-        assert traj.hausdorff_distance(line, units="km") == sqrt(4 + 1) / 1000.0
+        assert traj.hausdorff_distance(line, units="km") == sqrt(4 + 1) / 1000
 
     def test_hausdorff_distance_warning(self):
         with pytest.warns(UserWarning):

@@ -1,22 +1,31 @@
 # -*- coding: utf-8 -*-
 
+from copy import copy
+from datetime import datetime as datetime, timedelta as timedelta
+from math import sqrt
+
 import pandas as pd
 import pytest
-from pandas.testing import assert_frame_equal
+from pyproj import CRS
 from geopandas import GeoDataFrame
-from shapely.geometry import Point, Polygon, LineString
-from fiona.crs import from_epsg
-from datetime import datetime as datetime, timedelta as timedelta
-from copy import copy
-from math import sqrt
+from pandas import Timestamp
+from pandas.testing import assert_frame_equal
+from shapely.geometry import LineString, Point, Polygon, MultiPolygon
+
+from movingpandas.trajectory import (
+    TRAJ_ID_COL_NAME,
+    SPEED_COL_NAME,
+    DIRECTION_COL_NAME,
+    DISTANCE_COL_NAME,
+    ACCELERATION_COL_NAME,
+    ANGULAR_DIFFERENCE_COL_NAME,
+    TIMEDELTA_COL_NAME,
+)
 from movingpandas.trajectory_collection import TrajectoryCollection
-from movingpandas.trajectory import TRAJ_ID_COL_NAME
+from . import requires_holoviews, requires_folium, has_geopandas1, requires_geopandas1
 
-from . import requires_holoviews
-
-
-CRS_METRIC = from_epsg(31256)
-CRS_LATLON = from_epsg(4326)
+CRS_METRIC = CRS.from_user_input(31256)
+CRS_LATLON = CRS.from_user_input(4326)
 
 
 class TestTrajectoryCollection:
@@ -82,6 +91,11 @@ class TestTrajectoryCollection:
         assert self.collection.get_trajectory(2).id == 2
         assert self.collection.get_trajectory(3) is None
 
+    def test_get_trajectories(self):
+        assert len(self.collection.get_trajectories("A")) == 2
+        assert len(self.collection.get_trajectories("A").to_point_gdf()) == 8
+        assert len(self.collection.get_trajectories("B")) == 0
+
     def test_get_locations_at(self):
         locs = self.collection.get_locations_at(datetime(2018, 1, 1, 12, 6, 0))
         assert len(locs) == 2
@@ -110,6 +124,23 @@ class TestTrajectoryCollection:
         assert locs.iloc[1].geometry in [Point(0, 0), Point(10, 10)]
         assert locs.iloc[0].geometry != locs.iloc[1].geometry
         assert isinstance(locs, GeoDataFrame)
+        assert locs.crs == CRS_METRIC
+
+    def test_timestamp_column_present_in_start_locations(self):
+        locs = self.collection.get_start_locations()
+        assert "t" in locs.columns
+        assert locs["t"].tolist() == [
+            Timestamp("2018-01-01 12:00:00"),
+            Timestamp("2018-01-01 12:00:00"),
+        ]
+
+    def test_timestamp_column_present_in_end_locations(self):
+        locs = self.collection.get_end_locations()
+        assert "t" in locs.columns
+        assert locs["t"].tolist() == [
+            Timestamp("2018-01-01 14:15:00"),
+            Timestamp("2018-01-02 13:15:00"),
+        ]
 
     def test_get_end_locations(self):
         locs = self.collection.get_end_locations()
@@ -122,6 +153,7 @@ class TestTrajectoryCollection:
         assert locs.iloc[1].geometry in [Point(9, 9), Point(190, 10)]
         assert locs.iloc[0].geometry != locs.iloc[1].geometry
         assert isinstance(locs, GeoDataFrame)
+        assert locs.crs == CRS_METRIC
 
     def test_get_segments_between(self):
         collection = self.collection.get_segments_between(
@@ -136,11 +168,58 @@ class TestTrajectoryCollection:
         assert len(collection) == 1
         assert collection.trajectories[0] == self.collection.trajectories[0]
 
+    def test_intersection(self):
+        feature = {
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[(-1, -1), (-1, 1), (1, 1), (1, -1), (-1, -1)]],
+            },
+            "properties": {"id": 1, "name": "foo"},
+        }
+        collection = self.collection.intersection(feature)
+        assert len(collection) == 1
+
     def test_clip(self):
         polygon = Polygon([(-1, -1), (-1, 1), (1, 1), (1, -1), (-1, -1)])
+        collection = self.collection.copy()
         collection = self.collection.clip(polygon)
         assert len(collection) == 1
         assert collection.trajectories[0].to_linestring().wkt == "LINESTRING (0 0, 1 0)"
+
+    def test_clip_with_multipolygon(self):
+        polygon = MultiPolygon(
+            [
+                Polygon([(-1, -1), (-1, 1), (1, 1), (1, -1), (-1, -1)]),
+                Polygon([(5, 1), (7, 1), (7, 3), (5, 3), (5, 1)]),
+            ]
+        )
+        collection = self.collection.clip(polygon)
+        assert len(collection) == 2
+        assert collection.trajectories[0].to_linestring().wkt == "LINESTRING (0 0, 1 0)"
+        assert collection.trajectories[1].to_linestring().wkt == "LINESTRING (6 1, 6 3)"
+
+    def test_clip_with_multipolygon2(self):
+        polygon = MultiPolygon(
+            [
+                Polygon([(-1, -1), (-1, 1), (1, 1), (1, -1), (-1, -1)]),
+                Polygon([(3, -1), (3, 1), (4, 1), (4, -1), (3, -1)]),
+            ]
+        )
+        collection = self.collection.clip(polygon)
+        assert len(collection) == 2
+        assert collection.trajectories[0].to_linestring().wkt == "LINESTRING (0 0, 1 0)"
+        assert collection.trajectories[1].to_linestring().wkt == "LINESTRING (3 0, 4 0)"
+
+    def test_clip_with_min_length(self):
+        polygon = Polygon([(-1, -1), (-1, 1), (1, 1), (1, -1), (-1, -1)])
+        collection = self.collection.copy()
+        collection.min_length = 1
+        collection = collection.clip(polygon)
+        assert len(collection) == 1
+        collection = self.collection.copy()
+        collection.min_length = 2
+        collection = collection.clip(polygon)
+        assert len(collection) == 0
 
     def test_filter(self):
         assert len(self.collection.filter("obj", "A")) == 2
@@ -158,6 +237,17 @@ class TestTrajectoryCollection:
         result = self.collection.plot()
         assert isinstance(result, Axes)
 
+    @requires_folium
+    def test_explore_exists(self):
+        from folium.folium import Map
+
+        if has_geopandas1:
+            plot = self.collection.explore()
+            assert isinstance(plot, Map)
+        else:
+            with pytest.raises(NotImplementedError):
+                plot = self.collection.explore()
+
     @requires_holoviews
     def test_hvplot_exists(self):
         import holoviews
@@ -165,10 +255,41 @@ class TestTrajectoryCollection:
         result = self.collection_latlon.hvplot()
         assert isinstance(result, holoviews.core.overlay.Overlay)
 
-    def test_plot_exist_column(self):
+        plot = self.collection_latlon.hvplot()
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+        assert len(plot.Path.ddims) == 2
+
+        plot = self.collection_latlon.hvplot(color="red")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot(c="id")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot(c="id", colormap={1: "red", 2: "blue"})
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot_pts()
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot_pts(c="id")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot_pts(c="speed")
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+        plot = self.collection_latlon.hvplot_pts(c="id", colormap={1: "red", 2: "blue"})
+        assert isinstance(plot, holoviews.core.overlay.Overlay)
+
+    def test_plot_existing_column(self):
         from matplotlib.axes import Axes
 
         result = self.collection.plot(column="val")
+        assert isinstance(result, Axes)
+
+    def test_plot_speed(self):
+        from matplotlib.axes import Axes
+
+        result = self.collection.plot(column="speed")
         assert isinstance(result, Axes)
 
     def test_plot_speed_not_altering_collection(self):
@@ -179,6 +300,25 @@ class TestTrajectoryCollection:
                 for traj in self.collection.trajectories
             ]
         )
+
+    @requires_geopandas1
+    @requires_folium
+    def test_explore_speed_not_altering_collection(self):
+        self.collection.explore(column="speed")
+        assert all(
+            [
+                "speed" not in traj.df.columns.values
+                for traj in self.collection.trajectories
+            ]
+        )
+
+    @requires_geopandas1
+    @requires_folium
+    def test_explore_speed(self):
+        from folium.folium import Map
+
+        result = self.collection.explore(column="speed")
+        assert isinstance(result, Map)
 
     def test_traj_with_less_than_two_points(self):
         df = pd.DataFrame(
@@ -212,8 +352,8 @@ class TestTrajectoryCollection:
         trajs = [filter_trajectory(traj) for traj in self.collection]
 
         lengths = (1, 2)
-        for i, traj in enumerate(trajs):
-            assert len(traj.df) == lengths[i]
+        for traj, length in zip(trajs, lengths):
+            assert len(traj.df) == length
 
         collection = copy(self.collection)
         collection.trajectories = trajs
@@ -235,16 +375,132 @@ class TestTrajectoryCollection:
         with pytest.raises(RuntimeError):
             collection.add_traj_id()
 
-    def test_to_point_gdf(self):
+    def test_add_speed(self):
+        self.collection.add_speed()
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[SPEED_COL_NAME].tolist()
+        assert result0[0] == pytest.approx(0.01667, 0.001)
+        result1 = self.collection.trajectories[1].df[SPEED_COL_NAME].tolist()
+        assert result1[0] == pytest.approx(0.01667, 0.001)
+        assert len(result0) == 4
+
+    def test_add_speed_multithreaded(self):
+        self.collection.trajectories += self.collection.trajectories
+        expected = self.collection.copy()
+        expected.add_speed()
+        self.collection.add_speed(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[SPEED_COL_NAME].tolist()
+        assert result0 == expected.trajectories[0].df[SPEED_COL_NAME].tolist()
+        result1 = self.collection.trajectories[-1].df[SPEED_COL_NAME].tolist()
+        assert result1 == expected.trajectories[-1].df[SPEED_COL_NAME].tolist()
+        assert len(expected.trajectories) == len(self.collection.trajectories)
+        assert len(expected.trajectories) == 4
+
+    def test_add_acceleration(self):
+        self.collection.add_acceleration()
+        result1 = self.collection.trajectories[0].df[ACCELERATION_COL_NAME].tolist()
+        assert len(result1) == 4
+
+    def test_add_acceleration_multithreaded(self):
+        expected = self.collection.copy()
+        expected.add_acceleration()
+        print(expected.to_point_gdf())
+        self.collection.add_acceleration(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[ACCELERATION_COL_NAME].tolist()
+        assert result0 == expected.trajectories[0].df[ACCELERATION_COL_NAME].tolist()
+        result1 = self.collection.trajectories[1].df[ACCELERATION_COL_NAME].tolist()
+        assert result1 == expected.trajectories[1].df[ACCELERATION_COL_NAME].tolist()
+
+    def test_add_direction(self):
+        self.collection.add_direction()
+        result = self.collection.trajectories[0].df[DIRECTION_COL_NAME].tolist()
+        assert len(result) == 4
+
+    def test_add_direction_multithreaded(self):
+        expected = self.collection.copy()
+        expected.add_direction()
+        print(expected.to_point_gdf())
+        self.collection.add_direction(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[DIRECTION_COL_NAME].tolist()
+        assert result0 == expected.trajectories[0].df[DIRECTION_COL_NAME].tolist()
+        result1 = self.collection.trajectories[1].df[DIRECTION_COL_NAME].tolist()
+        assert result1 == expected.trajectories[1].df[DIRECTION_COL_NAME].tolist()
+
+    def test_add_distance(self):
+        self.collection.add_distance()
+        result0 = self.collection.trajectories[0].df[DISTANCE_COL_NAME].tolist()
+        assert len(result0) == 4
+
+    def test_add_distance_multithreaded(self):
+        expected = self.collection.copy()
+        expected.add_distance()
+        print(expected.to_point_gdf())
+        self.collection.add_distance(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[DISTANCE_COL_NAME].tolist()
+        assert result0 == expected.trajectories[0].df[DISTANCE_COL_NAME].tolist()
+        result1 = self.collection.trajectories[1].df[DISTANCE_COL_NAME].tolist()
+        assert result1 == expected.trajectories[1].df[DISTANCE_COL_NAME].tolist()
+
+    def test_add_angular_difference(self):
+        self.collection.add_angular_difference()
+        result1 = (
+            self.collection.trajectories[0].df[ANGULAR_DIFFERENCE_COL_NAME].tolist()
+        )
+        assert len(result1) == 4
+
+    def test_add_angular_difference_multithreaded(self):
+        expected = self.collection.copy()
+        expected.add_angular_difference()
+        print(expected.to_point_gdf())
+        self.collection.add_angular_difference(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = (
+            self.collection.trajectories[0].df[ANGULAR_DIFFERENCE_COL_NAME].tolist()
+        )
+        assert (
+            result0 == expected.trajectories[0].df[ANGULAR_DIFFERENCE_COL_NAME].tolist()
+        )
+        result1 = (
+            self.collection.trajectories[1].df[ANGULAR_DIFFERENCE_COL_NAME].tolist()
+        )
+        assert (
+            result1 == expected.trajectories[1].df[ANGULAR_DIFFERENCE_COL_NAME].tolist()
+        )
+
+    def test_add_timedelta(self):
+        self.collection.add_timedelta()
+        result1 = self.collection.trajectories[0].df[TIMEDELTA_COL_NAME].tolist()
+        assert len(result1) == 4
+
+    def test_add_timedelta_multithreaded(self):
+        expected = self.collection.copy()
+        expected.add_timedelta()
+        print(expected.to_point_gdf())
+        self.collection.add_timedelta(n_threads=2)
+        print(self.collection.to_point_gdf())
+        result0 = self.collection.trajectories[0].df[TIMEDELTA_COL_NAME].tolist()
+        assert result0 == expected.trajectories[0].df[TIMEDELTA_COL_NAME].tolist()
+        result1 = self.collection.trajectories[1].df[TIMEDELTA_COL_NAME].tolist()
+        assert result1 == expected.trajectories[1].df[TIMEDELTA_COL_NAME].tolist()
+
+    def test_to_point_gdf(self, tmp_path):
         point_gdf = self.collection.to_point_gdf()
-        point_gdf.to_file("temp.gpkg", layer="points", driver="GPKG")
+        gpkg_path = tmp_path / "temp.gpkg"
+        point_gdf.to_file(gpkg_path, layer="points", driver="GPKG")
+        assert gpkg_path.exists()
         assert_frame_equal(point_gdf, self.geo_df)
 
-    def test_to_line_gdf(self):
+    def test_to_line_gdf(self, tmp_path):
         temp_df = self.geo_df.drop(columns=["obj", "val", "val2"])
         tc = TrajectoryCollection(temp_df, "id")
         line_gdf = tc.to_line_gdf()
-        line_gdf.to_file("temp.gpkg", layer="lines", driver="GPKG")
+        gpkg_path = tmp_path / "temp.gpkg"
+        line_gdf.to_file(gpkg_path, layer="lines", driver="GPKG")
+        assert gpkg_path.exists()
         t1 = [
             datetime(2018, 1, 1, 12, 0),
             datetime(2018, 1, 1, 12, 6),
@@ -271,14 +527,16 @@ class TestTrajectoryCollection:
         expected_line_gdf = GeoDataFrame(df2, crs=CRS_METRIC)
         assert_frame_equal(line_gdf, expected_line_gdf)
 
-    def test_to_traj_gdf(self):
+    def test_to_traj_gdf(self, tmp_path):
         temp_df = self.geo_df.drop(columns=["obj", "val", "val2"])
         tc = TrajectoryCollection(temp_df, "id")
         traj_gdf = tc.to_traj_gdf()
-        traj_gdf.to_file("temp.gpkg", layer="trajs", driver="GPKG")
+        gpkg_path = tmp_path / "temp.gpkg"
+        traj_gdf.to_file(gpkg_path, layer="trajs", driver="GPKG")
+        assert gpkg_path.exists()
         rows = [
             {
-                "traj_id": 1,
+                "id": 1,
                 "start_t": datetime(2018, 1, 1, 12, 0, 0),
                 "end_t": datetime(2018, 1, 1, 14, 15, 0),
                 "geometry": LineString([(0, 0), (6, 0), (6, 6), (9, 9)]),
@@ -286,7 +544,7 @@ class TestTrajectoryCollection:
                 "direction": 45.0,
             },
             {
-                "traj_id": 2,
+                "id": 2,
                 "start_t": datetime(2018, 1, 1, 12, 0, 0),
                 "end_t": datetime(2018, 1, 2, 13, 15, 0),
                 "geometry": LineString([(10, 10), (16, 10), (16, 16), (190, 10)]),
@@ -308,7 +566,7 @@ class TestTrajectoryCollection:
         print(traj_gdf)
         rows = [
             {
-                "traj_id": 1,
+                "id": 1,
                 "start_t": datetime(2018, 1, 1, 12, 0, 0),
                 "end_t": datetime(2018, 1, 1, 14, 15, 0),
                 "geometry": LineString([(0, 0), (6, 0), (6, 6), (9, 9)]),
@@ -321,7 +579,7 @@ class TestTrajectoryCollection:
                 "val_max": 9,
             },
             {
-                "traj_id": 2,
+                "id": 2,
                 "start_t": datetime(2018, 1, 1, 12, 0, 0),
                 "end_t": datetime(2018, 1, 2, 13, 15, 0),
                 "geometry": LineString([(10, 10), (16, 10), (16, 16), (190, 10)]),
@@ -338,3 +596,10 @@ class TestTrajectoryCollection:
         expected_line_gdf = GeoDataFrame(df2, crs=CRS_METRIC)
 
         assert_frame_equal(traj_gdf, expected_line_gdf)
+
+    def test_to_mf_json(self):
+        json = self.collection.to_mf_json(datetime_to_str=False)
+        assert (
+            str(json)
+            == """{'type': 'FeatureCollection', 'features': [{'type': 'Feature', 'properties': {'id': 1, 'obj': 'A', 'val': 9, 'val2': 'a'}, 'temporalGeometry': {'type': 'MovingPoint', 'coordinates': [(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (9.0, 9.0)], 'datetimes': [Timestamp('2018-01-01 12:00:00'), Timestamp('2018-01-01 12:06:00'), Timestamp('2018-01-01 14:10:00'), Timestamp('2018-01-01 14:15:00')]}}, {'type': 'Feature', 'properties': {'id': 2, 'obj': 'A', 'val': 10, 'val2': 'e'}, 'temporalGeometry': {'type': 'MovingPoint', 'coordinates': [(10.0, 10.0), (16.0, 10.0), (16.0, 16.0), (190.0, 10.0)], 'datetimes': [Timestamp('2018-01-01 12:00:00'), Timestamp('2018-01-01 12:06:00'), Timestamp('2018-01-02 13:10:00'), Timestamp('2018-01-02 13:15:00')]}}]}"""  # noqa F401
+        )

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 
+import pytest
 import pandas as pd
 from pandas.testing import assert_frame_equal
-from fiona.crs import from_epsg
+from pyproj import CRS
 from datetime import timedelta, datetime
 from geopandas import GeoDataFrame
 from shapely.geometry import Point
@@ -13,11 +14,13 @@ from movingpandas.trajectory_splitter import (
     ObservationGapSplitter,
     SpeedSplitter,
     StopSplitter,
+    AngleChangeSplitter,
+    ValueChangeSplitter,
 )
 
 
-CRS_METRIC = from_epsg(31256)
-CRS_LATLON = from_epsg(4326)
+CRS_METRIC = CRS.from_user_input(31256)
+CRS_LATLON = CRS.from_user_input(4326)
 
 
 class TestTrajectorySplitter:
@@ -25,13 +28,13 @@ class TestTrajectorySplitter:
         df = pd.DataFrame(
             [
                 [1, "A", Point(0, 0), datetime(2018, 1, 1, 12, 0, 0), 9, "a"],
-                [1, "A", Point(6, 0), datetime(2018, 1, 1, 12, 6, 0), 5, "b"],
-                [1, "A", Point(6, 6), datetime(2018, 1, 1, 14, 10, 0), 2, "c"],
-                [1, "A", Point(9, 9), datetime(2018, 1, 1, 14, 15, 0), 4, "d"],
-                [2, "A", Point(10, 10), datetime(2018, 1, 1, 12, 0, 0), 10, "e"],
-                [2, "A", Point(16, 10), datetime(2018, 1, 1, 12, 6, 0), 6, "f"],
-                [2, "A", Point(16, 16), datetime(2018, 1, 2, 13, 10, 0), 7, "g"],
-                [2, "A", Point(190, 19), datetime(2018, 1, 2, 13, 15, 0), 3, "h"],
+                [1, "A", Point(6, 0), datetime(2018, 1, 1, 12, 6, 0), 5, "a"],
+                [1, "A", Point(6, 6), datetime(2018, 1, 1, 14, 10, 0), 2, "a"],
+                [1, "A", Point(9, 9), datetime(2018, 1, 1, 14, 15, 0), 4, "a"],
+                [2, "A", Point(10, 10), datetime(2018, 1, 1, 12, 0, 0), 10, "a"],
+                [2, "A", Point(16, 10), datetime(2018, 1, 1, 12, 6, 0), 6, "a"],
+                [2, "A", Point(16, 16), datetime(2018, 1, 2, 13, 10, 0), 7, "b"],
+                [2, "A", Point(190, 19), datetime(2018, 1, 2, 13, 15, 0), 3, "b"],
             ],
             columns=["id", "obj", "geometry", "t", "val", "val2"],
         ).set_index("t")
@@ -43,11 +46,11 @@ class TestTrajectorySplitter:
         split = TemporalSplitter(traj).split()
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1)], id="1_1970-01-01 00:00:00"
+        assert str(split.trajectories[0]) == str(
+            make_traj([Node(), Node(second=1), Node(day=2)], id="1_0")
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(day=2), Node(day=2, second=1)], id="1_1970-01-02 00:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(day=2), Node(day=2, second=1)], id="1_1")
         )
 
     def test_split_by_date_ignores_single_node_sgements(self):
@@ -55,22 +58,23 @@ class TestTrajectorySplitter:
         split = TemporalSplitter(traj).split()
         assert type(split) == TrajectoryCollection
         assert len(split) == 1
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1)], id="1_1970-01-01 00:00:00"
+        assert str(split.trajectories[0]) == str(
+            make_traj([Node(), Node(second=1), Node(day=2)], id="1_0")
         )
 
     def test_split_by_daybreak_same_day_of_year(self):
         traj = make_traj(
             [Node(), Node(second=1), Node(year=2000), Node(year=2000, second=1)]
         )
-        split = TemporalSplitter(traj).split()
+        with pytest.warns(UserWarning):
+            split = TemporalSplitter(traj).split()
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1)], id="1_1970-01-01 00:00:00"
+        assert str(split.trajectories[0]) == str(
+            make_traj([Node(), Node(second=1), Node(year=2000)], id="1_0")
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(year=2000), Node(year=2000, second=1)], id="1_2000-01-01 00:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(year=2000), Node(year=2000, second=1)], id="1_1")
         )
 
     def test_split_by_hour(self):
@@ -78,23 +82,23 @@ class TestTrajectorySplitter:
         split = TemporalSplitter(traj).split(mode="hour")
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1)], id="1_1970-01-01 00:00:00"
+        assert str(split.trajectories[0]) == str(
+            make_traj([Node(), Node(second=1), Node(hour=1)], id="1_0")
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(hour=1), Node(hour=1, second=1)], id="1_1970-01-01 01:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(hour=1), Node(hour=1, second=1)], id="1_1")
         )
 
     def test_split_by_2H(self):
         traj = make_traj([Node(), Node(second=1), Node(hour=2), Node(hour=2, second=1)])
-        split = TemporalSplitter(traj).split(mode="2H")
+        split = TemporalSplitter(traj).split(mode="2h")
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1)], id="1_1970-01-01 00:00:00"
+        assert str(split.trajectories[0]) == str(
+            make_traj([Node(), Node(second=1), Node(hour=2)], id="1_0")
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(hour=2), Node(hour=2, second=1)], id="1_1970-01-01 02:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(hour=2), Node(hour=2, second=1)], id="1_1")
         )
 
     def test_split_by_month(self):
@@ -111,12 +115,20 @@ class TestTrajectorySplitter:
         split = TemporalSplitter(traj).split(mode="month")
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1), Node(day=2), Node(day=2, second=1)],
-            id="1_1970-01-31 00:00:00",
+        assert str(split.trajectories[0]) == str(
+            make_traj(
+                [
+                    Node(),
+                    Node(second=1),
+                    Node(day=2),
+                    Node(day=2, second=1),
+                    Node(month=2),
+                ],
+                id="1_0",
+            )
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(month=2), Node(month=2, second=1)], id="1_1970-02-28 00:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(month=2), Node(month=2, second=1)], id="1_1")
         )
 
     def test_split_by_year(self):
@@ -130,15 +142,24 @@ class TestTrajectorySplitter:
                 Node(year=2000, second=1),
             ]
         )
-        split = TemporalSplitter(traj).split(mode="year")
+        with pytest.warns(UserWarning):
+            split = TemporalSplitter(traj).split(mode="year")
         assert type(split) == TrajectoryCollection
         assert len(split) == 2
-        assert split.trajectories[0] == make_traj(
-            [Node(), Node(second=1), Node(day=2), Node(day=2, second=1)],
-            id="1_1970-12-31 00:00:00",
+        assert str(split.trajectories[0]) == str(
+            make_traj(
+                [
+                    Node(),
+                    Node(second=1),
+                    Node(day=2),
+                    Node(day=2, second=1),
+                    Node(year=2000),
+                ],
+                id="1_0",
+            )
         )
-        assert split.trajectories[1] == make_traj(
-            [Node(year=2000), Node(year=2000, second=1)], id="1_2000-12-31 00:00:00"
+        assert str(split.trajectories[1]) == str(
+            make_traj([Node(year=2000), Node(year=2000, second=1)], id="1_1")
         )
 
     def test_split_by_observation_gap(self):
@@ -292,3 +313,83 @@ class TestTrajectorySplitter:
             split.trajectories[0].to_linestring().wkt
             == "LINESTRING (0 1, 0 22, 0 30, 0 40, 1 50)"
         )
+
+    def test_angle_splitter(self):
+        traj = make_traj(
+            [
+                Node(0, 0),
+                Node(2, 0, second=1),
+                Node(4, 0, second=2),
+                Node(6, 1, second=4),
+                Node(8, 2, second=6),
+                Node(8, 4, second=8),
+                Node(8, 6, second=9),
+                Node(8, 8, second=10),
+                Node(10, 10, second=11),
+                Node(12, 12, second=12),
+            ]
+        )
+        traj_copy = traj.copy()
+        split = AngleChangeSplitter(traj).split(min_angle=45, min_speed=1.0)
+
+        assert_frame_equal(traj.df, traj_copy.df)
+        assert type(split) == TrajectoryCollection
+        assert len(split) == 3
+        assert (
+            split.trajectories[0].to_linestring().wkt
+            == "LINESTRING (0 0, 2 0, 4 0, 6 1, 8 2)"
+        )
+        assert (
+            split.trajectories[1].to_linestring().wkt
+            == "LINESTRING (8 2, 8 4, 8 6, 8 8)"
+        )
+        assert (
+            split.trajectories[2].to_linestring().wkt
+            == "LINESTRING (8 8, 10 10, 12 12)"
+        )
+
+    def test_angle_splitter_min_speed(self):
+        traj = make_traj(
+            [
+                Node(0, 0),
+                Node(2, 0, second=1),
+                Node(4, 0, second=2),
+                Node(6, 1, second=4),
+                Node(8, 2, second=6),
+                Node(8, 4, second=8),
+                Node(8, 6, second=9),
+                Node(8, 8, second=10),
+                Node(10, 10, second=11),
+                Node(12, 12, second=12),
+            ]
+        )
+        traj_copy = traj.copy()
+        split = AngleChangeSplitter(traj).split(min_angle=45, min_speed=1.5)
+
+        assert_frame_equal(traj.df, traj_copy.df)
+        assert type(split) == TrajectoryCollection
+        assert len(split) == 3
+        assert (
+            split.trajectories[0].to_linestring().wkt
+            == "LINESTRING (0 0, 2 0, 4 0, 6 1, 8 2, 8 4)"
+        )
+        assert split.trajectories[1].to_linestring().wkt == "LINESTRING (8 4, 8 6, 8 8)"
+        assert (
+            split.trajectories[2].to_linestring().wkt
+            == "LINESTRING (8 8, 10 10, 12 12)"
+        )
+
+    def test_split_by_value_change(self):
+        split = ValueChangeSplitter(self.collection).split(col_name="val2")
+        assert type(split) == TrajectoryCollection
+        assert len(split) == 3
+        assert (
+            split.trajectories[1].to_linestring().wkt
+            == "LINESTRING (10 10, 16 10, 16 16)"
+        )
+        assert split.trajectories[2].to_linestring().wkt == "LINESTRING (16 16, 190 19)"
+
+    def test_split_by_value_change_empty_results(self):
+        split = ValueChangeSplitter(self.collection).split(col_name="val")
+        assert type(split) == TrajectoryCollection
+        assert len(split) == 6
