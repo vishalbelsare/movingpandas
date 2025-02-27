@@ -44,33 +44,7 @@ def _get_C_info():
     except Exception:
         proj_dir = None
 
-    try:
-        import shapely._buildcfg
-
-        geos_version = "{}.{}.{}".format(*shapely._buildcfg.geos_version)
-        geos_dir = shapely._buildcfg.geos_library_path
-    except Exception:
-        geos_version = None
-        geos_dir = None
-
-    try:
-        import fiona
-
-        gdal_version = fiona.env.get_gdal_release_name()
-    except Exception:
-        gdal_version = None
-    try:
-        import fiona
-
-        gdal_dir = fiona.env.GDALDataFinder().search()
-    except Exception:
-        gdal_dir = None
-
     blob = [
-        ("GEOS", geos_version),
-        ("GEOS lib", geos_dir),
-        ("GDAL", gdal_version),
-        ("GDAL data dir", gdal_dir),
         ("PROJ", proj_version),
         ("PROJ data dir", proj_dir),
     ]
@@ -87,19 +61,17 @@ def _get_deps_info():
         version information on relevant Python libraries
     """
     deps = [
-        "geopandas",
-        "pandas",
-        "fiona",
         "numpy",
-        "shapely",
-        "rtree",
-        "pyproj",
-        "matplotlib",
-        "mapclassify",
+        "geopandas",
         "geopy",
+        "geoviews",
         "holoviews",
         "hvplot",
-        "geoviews",
+        "mapclassify",
+        "matplotlib",
+        "pandas",
+        "pyproj",
+        "shapely",
         "stonesoup",
     ]
 
@@ -133,17 +105,16 @@ def show_versions():
     proj_info = _get_C_info()
 
     maxlen = max(len(x) for x in deps_info)
-    tpl = "{{k:<{maxlen}}}: {{stat}}".format(maxlen=maxlen)
     print(f"\nMovingPandas {mpd_version}")
     print("\nSYSTEM INFO")
     print("-----------")
     for k, stat in sys_info.items():
-        print(tpl.format(k=k, stat=stat))
-    print("\nGEOS, GDAL, PROJ INFO")
-    print("---------------------")
+        print(f"{k: <{maxlen}}: {stat}")
+    print("\nPROJ INFO")
+    print("-----------")
     for k, stat in proj_info.items():
-        print(tpl.format(k=k, stat=stat))
+        print(f"{k: <{maxlen}}: {stat}")
     print("\nPYTHON DEPENDENCIES")
     print("-------------------")
     for k, stat in deps_info.items():
-        print(tpl.format(k=k, stat=stat))
+        print(f"{k: <{maxlen}}: {stat}")

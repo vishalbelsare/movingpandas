@@ -1,4 +1,4 @@
-name: movingpandas
+name: movingpandas-dev
 channels:
   - conda-forge
 dependencies:
@@ -6,6 +6,7 @@ dependencies:
   - black
   - cartopy
   - codecov
+  - colorcet
   - cython
   - hvplot
   - flake8

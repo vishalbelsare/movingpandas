@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 
+import itertools as it
 import pandas as pd
 from shapely.geometry import Point, LineString, shape
 from shapely.affinity import translate
 from datetime import datetime, timedelta
 
-from .time_range_utils import TemporalRange, SpatioTemporalRange
+from .spatiotemporal_utils import TRange, STRange
 
 
 def _get_spatiotemporal_ref(row):
@@ -40,7 +41,7 @@ def _get_spatiotemporal_ref(row):
             tn = row["t"]
         if is_equal(t0, row["prev_t"]):
             t0 = row["prev_t"]
-        return SpatioTemporalRange(pt0, ptn, t0, tn)
+        return STRange(pt0, ptn, t0, tn)
     else:
         return None
 
@@ -58,7 +59,7 @@ def _dissolve_ranges(ranges):
         if r is None:
             continue  # raise ValueError('Received range that is None!')
         if new_range is None:
-            new_range = SpatioTemporalRange(r.pt_0, r.pt_n, r.t_0, r.t_n)
+            new_range = STRange(r.pt_0, r.pt_n, r.t_0, r.t_n)
         elif new_range.t_n == r.t_0 or (
             r.t_0 > new_range.t_n and is_equal(r.t_0, new_range.t_n)
         ):
@@ -66,7 +67,7 @@ def _dissolve_ranges(ranges):
             new_range.pt_n = r.pt_n
         else:
             dissolved_ranges.append(new_range)
-            new_range = SpatioTemporalRange(r.pt_0, r.pt_n, r.t_0, r.t_n)
+            new_range = STRange(r.pt_0, r.pt_n, r.t_0, r.t_n)
     dissolved_ranges.append(new_range)
     return dissolved_ranges
 
@@ -95,7 +96,7 @@ def create_entry_and_exit_points(traj, range):
     Returns a dataframe with inserted entry and exit points according to the
     provided SpatioTemporalRange.
     """
-    if type(range) != SpatioTemporalRange:
+    if type(range) != STRange:
         raise TypeError("Input range has to be a SpatioTemporalRange!")
 
     crs = traj.df.crs
@@ -133,20 +134,21 @@ def create_entry_and_exit_points(traj, range):
 
 
 def _get_segments_for_ranges(traj, ranges):
-    counter = 0
+    counter = it.count()
     segments = []  # list of trajectories
     for the_range in ranges:
         temp_traj = traj.copy()
-        if type(the_range) == SpatioTemporalRange:
+        if type(the_range) == STRange:
             temp_traj.df = create_entry_and_exit_points(traj, the_range)
         try:
             segment = temp_traj.get_segment_between(the_range.t_0, the_range.t_n)
         except ValueError:
             continue
-        segment.id = "{}_{}".format(traj.id, counter)
+        segment.id = f"{traj.id}_{next(counter)}"
         segment.parent = traj
+        # remove timestamps from trajectory IDs
+        segment.df[segment.get_traj_id_col()] = segment.id
         segments.append(segment)
-        counter += 1
     return segments
 
 
@@ -161,9 +163,8 @@ def _determine_time_ranges_pointbased(traj, polygon):
     df.columns = df.columns.map("_".join)
 
     ranges = []
-    for index, row in df.iterrows():
-        if row["intersects_min"]:
-            ranges.append(TemporalRange(row["t_min"], row["t_max"]))
+    for _, row in df[df["intersects_min"]].iterrows():
+        ranges.append(TRange(row["t_min"], row["t_max"]))
     return ranges
 
 
@@ -197,6 +198,17 @@ def _determine_time_ranges_linebased(traj, polygon):
     #       intersection.
     possible_matches = _get_potentially_intersecting_lines(traj, polygon)
     possible_matches["spatial_intersection"] = possible_matches.intersection(polygon)
+
+    # Intersecting trajectories with complex geometries (e.g. multipolygons with holes)
+    # often ends up as MultiLineStrings, which we can't handle downstream.
+    # Ensure we break MultiLineStrings into simple LineStrings
+    if "MultiLineString" in possible_matches["spatial_intersection"].geom_type.unique():
+        spatial_intersection_exp = possible_matches["spatial_intersection"].explode(
+            index_parts=False
+        )
+        possible_matches = possible_matches.reindex(spatial_intersection_exp.index)
+        possible_matches["spatial_intersection"] = spatial_intersection_exp
+
     possible_matches["spatiotemporal_intersection"] = possible_matches.apply(
         _get_spatiotemporal_ref, axis=1
     )

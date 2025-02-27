@@ -2,6 +2,7 @@ MovingPandas.TrajectorySplitter
 ===========================================
 
 .. automodule:: movingpandas
+    :members:
     :noindex:
 
 .. autoclass:: TrajectorySplitter
@@ -9,7 +10,7 @@ MovingPandas.TrajectorySplitter
 
    .. automethod:: __init__
 
-.. autoclass:: TemporalSplitter
+.. autoclass:: AngleChangeSplitter
    :members:
 
 .. autoclass:: ObservationGapSplitter
@@ -21,3 +22,8 @@ MovingPandas.TrajectorySplitter
 .. autoclass:: StopSplitter
    :members:
 
+.. autoclass:: TemporalSplitter
+   :members:
+
+.. autoclass:: ValueChangeSplitter
+   :members:

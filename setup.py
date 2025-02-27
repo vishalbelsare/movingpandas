@@ -1,28 +1,28 @@
 import setuptools
 
 with open("README.md", "r") as fh:
-    LONG_DESCRIPTION = fh.read()
+    LONG_DESCRIPTION = (
+        "Trajectory data structures and functions for handling movement data"
+    )
 
 # Packages that MovingPandas uses explicitly:
 INSTALL_REQUIRES = [
     "matplotlib",
     "geopandas",
-    "fiona",
-    "rtree",
     "geopy",
 ]
 
 setuptools.setup(
     name="movingpandas",
-    version="0.16.0",
+    version="0.21.2",
     author="Anita Graser",
     author_email="anitagraser@gmx.at",
-    description="MovingPandas implements Trajectory classes and corresponding methods "
-    "for the analysis of movement data based on GeoPandas. "
+    description="MovingPandas provides trajectory data structures and "
+    "functions for handling movement data based on Pandas, GeoPandas, and more. "
     "Visit movingpandas.org for details.",
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
-    url="https://github.com/anitagraser/movingpandas",
+    url="https://github.com/movingpandas/movingpandas",
     packages=[
         "movingpandas",
         "movingpandas.tools",

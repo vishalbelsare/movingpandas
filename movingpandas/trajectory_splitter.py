@@ -3,12 +3,14 @@
 from copy import copy
 from pandas import Grouper
 import numpy as np
+import warnings
 
 from .trajectory_stop_detector import TrajectoryStopDetector
 from .trajectory import Trajectory
 from .trajectory_collection import TrajectoryCollection
 from .trajectory_utils import convert_time_ranges_to_segments
-from .time_range_utils import TemporalRange
+from .spatiotemporal_utils import TRange
+from .geometry_utils import angular_difference
 
 
 class TrajectorySplitter:
@@ -80,13 +82,34 @@ class TemporalSplitter(TrajectorySplitter):
 
     def _split_traj(self, traj, mode="day", min_length=0):
         result = []
-        modes = {"hour": "H", "day": "D", "month": "M", "year": "Y"}
+        modes = {"hour": "h", "day": "D", "month": "ME", "year": "YE"}
         if mode in modes.keys():
             mode = modes[mode]
         grouped = traj.df.groupby(Grouper(freq=mode))
-        for key, values in grouped:
-            if len(values) > 1:
-                result.append(Trajectory(values, "{}_{}".format(traj.id, key)))
+        dfs = []
+        show_warning = False
+        for _, values in grouped:
+            if len(values) == 0:
+                show_warning = True
+            else:
+                dfs.append(values)
+        if show_warning:
+            warnings.warn(
+                f"Temporal splitting results contain observation gaps that exceed your "
+                f"split size of {mode}. Consider running the ObservationGapSplitter to "
+                f"further clean the results."
+            )
+        print(dfs)
+        for i, df in enumerate(dfs):
+            if i < len(dfs) - 1:
+                next_index = dfs[i + 1].iloc[0].name
+                next_values = dfs[i + 1].iloc[0].to_dict()
+                df.loc[next_index] = next_values
+                df = df.sort_index(ascending=True)
+            if len(df) > 1:
+                result.append(
+                    Trajectory(df, f"{traj.id}_{i}", traj_id_col=traj.get_traj_id_col())
+                )
         return TrajectoryCollection(result, min_length=min_length)
 
 
@@ -119,7 +142,9 @@ class ObservationGapSplitter(TrajectorySplitter):
         for i, df in enumerate(dfs):
             df = df.drop(columns=["t", "gap"])
             if len(df) > 1:
-                result.append(Trajectory(df, "{}_{}".format(traj.id, i)))
+                result.append(
+                    Trajectory(df, f"{traj.id}_{i}", traj_id_col=traj.get_traj_id_col())
+                )
         return TrajectoryCollection(result, min_length=min_length)
 
 
@@ -151,7 +176,7 @@ class SpeedSplitter(TrajectorySplitter):
 
     def _split_traj(self, traj, speed, duration, min_length=0, max_speed=np.inf):
         traj = traj.copy()
-        speed_col_name = traj.get_speed_column_name()
+        speed_col_name = traj.get_speed_col()
         if speed_col_name not in traj.df.columns:
             traj.add_speed(overwrite=True)
         traj.df = traj.df[traj.df[speed_col_name].between(speed, max_speed)]
@@ -192,16 +217,118 @@ class StopSplitter(TrajectorySplitter):
 
     @staticmethod
     def get_time_ranges_between_stops(traj, stop_ranges):
-        result = []
-        if stop_ranges:
-            for i in range(0, len(stop_ranges)):
-                if i == 0:
-                    result.append(
-                        TemporalRange(traj.get_start_time(), stop_ranges[i].t_0)
-                    )
-                    continue
-                result.append(TemporalRange(stop_ranges[i - 1].t_n, stop_ranges[i].t_0))
-            result.append(TemporalRange(stop_ranges[-1].t_n, traj.get_end_time()))
-        else:
-            result.append(TemporalRange(traj.get_start_time(), traj.get_end_time()))
+        items = [traj.get_start_time()]
+        for stop_range in stop_ranges:
+            items.append(stop_range.t_0)
+            items.append(stop_range.t_n)
+        items.append(traj.get_end_time())
+        result = [TRange(*items[x : x + 2]) for x in range(0, len(items), 2)]
         return result
+
+
+class AngleChangeSplitter(TrajectorySplitter):
+    """
+    Split trajectories into subtrajectories whenever there is a specified change in
+    the heading angle.
+
+    Parameters
+    ----------
+    min_angle : float
+        Minimum angle change
+    min_speed: float
+        Min speed threshold at which points are considered for angle change.
+        (Speed is calculated as CRS units per second, except if the CRS is geographic
+        (e.g. EPSG:4326 WGS84) then speed is calculated in meters per second.)
+    min_length : numeric
+        Desired minimum length of trajectories. Shorter trajectories are discarded.
+        (Length is calculated using CRS units, except if the CRS is geographic
+        (e.g. EPSG:4326 WGS84) then length is calculated in metres.)
+
+    Examples
+    --------
+
+    >>> mpd.AngleSplitter(traj).split(min_angle=45, min_speed=15)
+    """
+
+    def _split_traj(self, traj, min_angle=45, min_speed=0, min_length=0):
+        result = []
+        traj = traj.copy()
+
+        direction_col_name = traj.get_direction_col()
+        if direction_col_name not in traj.df.columns:
+            traj.add_direction(overwrite=True)
+
+        speed_col_name = traj.get_speed_col()
+        if speed_col_name not in traj.df.columns:
+            traj.add_speed(overwrite=True)
+
+        comp_dir = traj.df[direction_col_name].iloc[0]
+        traj.df["dirChange"] = -1
+        dir_group = 0
+
+        for i, (direction, speed) in enumerate(
+            zip(traj.df[direction_col_name].tolist(), traj.df[speed_col_name].tolist())
+        ):
+            if speed >= min_speed:
+                if angular_difference(comp_dir, direction) >= min_angle:
+                    comp_dir = direction
+                    dir_group += 1
+
+            traj.df.iloc[i, traj.df.columns.get_loc("dirChange")] = dir_group
+
+        dfs = [group[1] for group in traj.df.groupby(traj.df["dirChange"])]
+        for i, df in enumerate(dfs):
+            df = df.drop(columns=["dirChange"])
+            if len(df) > 1:
+                prev_index = dfs[i - 1].iloc[-1].name
+                prev_values = dfs[i - 1].iloc[-1].to_dict()
+                if i > 0:
+                    df.loc[prev_index] = prev_values
+                    df = df.sort_index(ascending=True)
+
+                result.append(
+                    Trajectory(df, f"{traj.id}_{i}", traj_id_col=traj.get_traj_id_col())
+                )
+
+        return TrajectoryCollection(result, min_length=min_length)
+
+
+class ValueChangeSplitter(TrajectorySplitter):
+    """
+    Split trajectories into subtrajectories whenever there is a change in
+    the specified column values.
+
+    Parameters
+    ----------
+    col_name : string
+        Name of the col to monitor for changes in consecutive values
+    min_length : numeric
+        Desired minimum length of trajectories. Shorter trajectories are discarded.
+        (Length is calculated using CRS units, except if the CRS is geographic
+        (e.g. EPSG:4326 WGS84) then length is calculated in metres.)
+
+    Examples
+    --------
+
+    >>> mpd.ValueChangeSplitter(traj).split(col_name='column1')
+    """
+
+    def _split_traj(self, traj, col_name, min_length=0):
+        result = []
+        temp_df = traj.df.copy()
+        temp_df["t"] = temp_df.index
+        temp_df["change"] = temp_df[col_name].shift() != temp_df[col_name]
+        temp_df["change"] = temp_df["change"].apply(lambda x: 1 if x else 0).cumsum()
+        dfs = [group[1] for group in temp_df.groupby(temp_df["change"])]
+        for i, df in enumerate(dfs):
+            df = df.drop(columns=["t", "change"])
+            if i < (len(dfs) - 1):
+                next_index = dfs[i + 1].iloc[0].name
+                next_values = dfs[i + 1].iloc[0].to_dict()
+                df.loc[next_index] = next_values
+                df = df.sort_index(ascending=True)
+            if len(df) > 1:
+                result.append(
+                    Trajectory(df, f"{traj.id}_{i}", traj_id_col=traj.get_traj_id_col())
+                )
+        return TrajectoryCollection(result, min_length=min_length)

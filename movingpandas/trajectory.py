@@ -7,7 +7,6 @@ from shapely.geometry import Point, LineString
 from pandas import DataFrame, to_datetime, Series
 from pandas.core.indexes.datetimes import DatetimeIndex
 from geopandas import GeoDataFrame
-from geopy.distance import geodesic
 
 try:
     from pyproj import CRS
@@ -16,13 +15,14 @@ except ImportError:
     from fiona.crs import from_epsg
 
 from .overlay import clip, intersection, intersects, create_entry_and_exit_points
-from .time_range_utils import SpatioTemporalRange
+from .spatiotemporal_utils import STRange
 from .geometry_utils import (
     angular_difference,
     azimuth,
     calculate_initial_compass_bearing,
-    measure_distance_geodesic,
-    measure_distance_euclidean,
+    measure_distance,
+    measure_distance_line,
+    measure_length,
     point_gdf_to_linestring,
 )
 from .unit_utils import (
@@ -31,7 +31,9 @@ from .unit_utils import (
     to_unixtime,
     get_conversion,
 )
+from .spatiotemporal_utils import get_speed2
 from .trajectory_plotter import _TrajectoryPlotter
+from .io import gdf_to_mf_json
 
 warnings.filterwarnings(  # see https://github.com/movingpandas/movingpandas/issues/289
     "ignore", message="CRS not set for some of the concatenation inputs."
@@ -55,6 +57,7 @@ class Trajectory:
         self,
         df,
         traj_id,
+        traj_id_col=None,
         obj_id=None,
         t=None,
         x=None,
@@ -91,7 +94,6 @@ class Trajectory:
         >>> import pandas as pd
         >>> import geopandas as gpd
         >>> import movingpandas as mpd
-        >>> from fiona.crs import from_epsg
         >>>
         >>> df = pd.DataFrame([
         ...     {'geometry':Point(0,0), 't':datetime(2018,1,1,12,0,0)},
@@ -99,7 +101,7 @@ class Trajectory:
         ...     {'geometry':Point(6,6), 't':datetime(2018,1,1,12,10,0)},
         ...     {'geometry':Point(9,9), 't':datetime(2018,1,1,12,15,0)}
         ... ]).set_index('t')
-        >>> gdf = gpd.GeoDataFrame(df, crs=from_epsg(31256))
+        >>> gdf = gpd.GeoDataFrame(df, crs=31256)
         >>> traj = mpd.Trajectory(gdf, 1)
 
         For more examples, see the tutorial notebooks_.
@@ -146,9 +148,17 @@ class Trajectory:
         self.id = traj_id
         self.obj_id = obj_id
         df.sort_index(inplace=True)
-        self.df = df[~df.index.duplicated(keep="first")]
+        self.df = df[~df.index.duplicated(keep="first")].copy()
         self.crs = df.crs
         self.parent = parent
+
+        if traj_id_col is not None:
+            self.traj_id_col_name = traj_id_col
+        else:
+            self.traj_id_col_name = TRAJ_ID_COL_NAME
+        self.df[self.traj_id_col_name] = traj_id
+        self.df[self.traj_id_col_name].astype("category")
+
         if self.crs is not None:
             self.crs_units = self.crs.axis_info[0].unit_name
         else:
@@ -172,23 +182,13 @@ class Trajectory:
         except RuntimeError:
             return "Invalid trajectory!"
         return (
-            "Trajectory {id} ({t0} to {tn}) | Size: {n} | Length: {len:.1f}m\n"
-            "Bounds: {bbox}\n{wkt}".format(
-                id=self.id,
-                t0=self.get_start_time(),
-                tn=self.get_end_time(),
-                n=self.size(),
-                wkt=line.wkt[:100],
-                bbox=self.get_bbox(),
-                len=self.get_length(),
-            )
+            f"Trajectory {self.id} ({self.get_start_time()} to {self.get_end_time()}) "
+            f"| Size: {self.size()} | Length: {round(self.get_length(), 1)}m\n"
+            f"Bounds: {self.get_bbox()}\n{line.wkt[:100]}"
         )
 
     def __repr__(self):
         return self.__str__()
-
-    def __len__(self):
-        return self.get_length()
 
     def __eq__(self, other):
         # TODO: make bullet proof
@@ -217,8 +217,24 @@ class Trajectory:
         -------
         Trajectory
         """
-        copied = Trajectory(self.df.copy(), self.id, parent=self.parent)
+        copied = Trajectory(
+            self.df.copy(),
+            self.id,
+            parent=self.parent,
+            traj_id_col=self.traj_id_col_name,
+        )
         return copied
+
+    def drop(self, **kwargs):
+        """
+        Drop columns or rows from the trajectory DataFrame
+
+        Examples
+        --------
+
+        >>> trajectory.drop(columns=['abc','def'])
+        """
+        self.df.drop(**kwargs, inplace=True)
 
     def plot(self, *args, **kwargs):
         """
@@ -242,6 +258,31 @@ class Trajectory:
         >>> trajectory.plot(column='speed', legend=True, figsize=(9,5))
         """
         return _TrajectoryPlotter(self, *args, **kwargs).plot()
+
+    def explore(self, *args, **kwargs):
+        """
+        Generate a plot using GeoPandas explore (folium/leaflet.js)
+        https://geopandas.org/en/stable/docs/reference/api/geopandas.GeoDataFrame.explore.html
+
+        Parameters
+        ----------
+        args :
+            These parameters will be passed to GeoPandas explore
+        kwargs :
+            These parameters will be passed to GeoPandas explore
+
+        Returns
+        -------
+        m : folium.folium.Map
+            folium Map instance
+
+        Examples
+        --------
+        Plot speed along trajectory (with legend and specified figure size):
+
+        >>> trajectory.explore(column='speed', vmax=20, tiles="CartoDB positron")
+        """  # noqa: E501
+        return _TrajectoryPlotter(self, *args, **kwargs).explore()
 
     def hvplot(self, *args, **kwargs):
         """
@@ -270,6 +311,28 @@ class Trajectory:
         """  # noqa: E501
         return _TrajectoryPlotter(self, *args, **kwargs).hvplot()
 
+    def hvplot_pts(self, *args, **kwargs):
+        """
+        Generate an interactive plot of trajectory points.
+
+        Parameters
+        ----------
+        args :
+            These parameters will be passed to the TrajectoryPlotter
+        kwargs :
+            These parameters will be passed to the TrajectoryPlotter
+
+            To customize the plots, check the list of supported colormaps:
+            https://holoviews.org/user_guide/Colormaps.html#available-colormaps
+
+        Examples
+        --------
+        Plot points colored by speed (with legend and specified figure size):
+
+        >>> collection.hvplot_pts(c='speed', width=700, height=400, colorbar=True)
+        """  # noqa: E501
+        return _TrajectoryPlotter(self, *args, **kwargs).hvplot_pts()
+
     def is_valid(self):
         """
         Return whether the trajectory meets minimum requirements.
@@ -284,9 +347,15 @@ class Trajectory:
             return False
         return True
 
+    def get_crs(self):
+        """
+        Return the CRS of the trajectory
+        """
+        return self.crs
+
     def to_crs(self, crs):
         """
-        Returns the trajectory reprojected to the target CRS.
+        Return the trajectory reprojected to the target CRS
 
         Parameters
         ----------
@@ -305,15 +374,75 @@ class Trajectory:
         >>> reprojected = trajectory.to_crs(CRS(4088))
         """
         temp = self.copy()
+        if type(crs) != CRS:
+            crs = CRS(crs)
         temp.crs = crs
         temp.df = temp.df.to_crs(crs)
-        if type(crs) == CRS:
-            temp.is_latlon = crs.is_geographic
-        else:
-            temp.is_latlon = crs["init"] == from_epsg(4326)["init"]
+        temp.is_latlon = crs.is_geographic
         return temp
 
-    def get_speed_column_name(self):
+    def is_latlon(self):
+        """
+        Return True if the trajectory CRS is geographic (e.g. EPSG:4326 WGS84)
+        """
+        return self.is_latlon
+
+    def get_min(self, column):
+        """
+        Return minimum value in the provided DataFrame column
+
+        Parameters
+        ----------
+        column : string
+            Name of the DataFrame column
+
+        Returns
+        -------
+        Sortable
+            Minimum value
+        """
+        return self.df[column].min()
+
+    def get_max(self, column):
+        """
+        Return maximum value in the provided DataFrame column
+
+        Parameters
+        ----------
+        column : string
+            Name of the DataFrame column
+
+        Returns
+        -------
+        Sortable
+            Maximum value
+        """
+        return self.df[column].max()
+
+    def get_column_names(self):
+        """
+        Return the list of column names
+
+        Returns
+        -------
+        list
+        """
+        return self.df.columns
+
+    def get_traj_id_col(self):
+        """
+        Return name of the trajectory ID column
+
+        Returns
+        -------
+        string
+        """
+        if hasattr(self, "traj_id_col_name"):
+            return self.traj_id_col_name
+        else:
+            return TRAJ_ID_COL_NAME
+
+    def get_speed_col(self):
         """
         Return name of the speed column
 
@@ -326,7 +455,7 @@ class Trajectory:
         else:
             return SPEED_COL_NAME
 
-    def get_distance_column_name(self):
+    def get_distance_col(self):
         """
         Return name of the distance column
 
@@ -339,7 +468,7 @@ class Trajectory:
         else:
             return DISTANCE_COL_NAME
 
-    def get_direction_column_name(self):
+    def get_direction_col(self):
         """
         Return name of the direction column
 
@@ -352,9 +481,9 @@ class Trajectory:
         else:
             return DIRECTION_COL_NAME
 
-    def get_angular_difference_column_name(self):
+    def get_angular_difference_col(self):
         """
-        Retrun name of the angular difference column
+        Return name of the angular difference column
 
         Returns
         -------
@@ -365,7 +494,7 @@ class Trajectory:
         else:
             return ANGULAR_DIFFERENCE_COL_NAME
 
-    def get_timedelta_column_name(self):
+    def get_timedelta_col(self):
         """
         Return name of the timedelta column
 
@@ -378,7 +507,7 @@ class Trajectory:
         else:
             return TIMEDELTA_COL_NAME
 
-    def get_geom_column_name(self):
+    def get_geom_col(self):
         """
         Return name of the geometry column
 
@@ -397,7 +526,7 @@ class Trajectory:
         shapely LineString
         """
         try:
-            return point_gdf_to_linestring(self.df, self.get_geom_column_name())
+            return point_gdf_to_linestring(self.df, self.get_geom_col())
         except RuntimeError:
             raise RuntimeError("Cannot generate LineString")
 
@@ -411,12 +540,11 @@ class Trajectory:
             WKT of trajectory as LineStringM
         """
         # Shapely only supports x, y, z. Therefore, this is a bit hacky!
-        coords = ""
-        for index, row in self.df.iterrows():
-            pt = row[self.get_geom_column_name()]
+        coords = []
+        for index, pt in self.df[self.get_geom_col()].items():
             t = to_unixtime(index)
-            coords += "{} {} {}, ".format(pt.x, pt.y, t)
-        wkt = "LINESTRING M ({})".format(coords[:-2])
+            coords.append(f"{pt.x} {pt.y} {t}")
+        wkt = f"LINESTRING M ({', '.join(coords)})"
         return wkt
 
     def to_point_gdf(self, return_orig_tz=False):
@@ -436,7 +564,7 @@ class Trajectory:
             return self.df.tz_localize(self.df_orig_tz)
         return self.df
 
-    def to_line_gdf(self):
+    def to_line_gdf(self, columns=None):
         """
         Return the trajectory's line segments as GeoDataFrame.
 
@@ -444,11 +572,13 @@ class Trajectory:
         -------
         GeoDataFrame
         """
-        line_gdf = self._to_line_df()
-        line_gdf.drop(columns=[self.get_geom_column_name(), "prev_pt"], inplace=True)
+        line_gdf = self._to_line_df(columns)
+        line_gdf.drop(columns=[self.get_geom_col(), "prev_pt"], inplace=True)
         line_gdf.reset_index(drop=True, inplace=True)
         line_gdf.rename(columns={"line": "geometry"}, inplace=True)
         line_gdf.set_geometry("geometry", inplace=True)
+        if self.crs:
+            line_gdf.set_crs(self.crs, inplace=True)
         return line_gdf
 
     def to_traj_gdf(self, wkt=False, agg=False):
@@ -476,7 +606,7 @@ class Trajectory:
         GeoDataFrame
         """
         properties = {
-            TRAJ_ID_COL_NAME: self.id,
+            self.traj_id_col_name: self.id,
             "start_t": self.get_start_time(),
             "end_t": self.get_end_time(),
             "geometry": self.to_linestring(),
@@ -503,6 +633,30 @@ class Trajectory:
         df = DataFrame([properties])
         traj_gdf = GeoDataFrame(df, crs=self.crs)
         return traj_gdf
+
+    def to_mf_json(self, datetime_to_str=True, temporal_columns=None):
+        """
+        Converts a Trajectory to a dictionary compatible with the Moving
+        Features JSON (MF-JSON) specification.
+
+        Examples
+        --------
+
+        >>> traj.to_mf_json()
+
+        Returns:
+            dict: The MF-JSON representation of the GeoDataFrame as a dictionary.
+        """
+        tmp = self.to_point_gdf()
+        t = tmp.index.name
+        mf_json = gdf_to_mf_json(
+            tmp.reset_index(),
+            self.get_traj_id_col(),
+            t,
+            datetime_to_str=datetime_to_str,
+            temporal_columns=temporal_columns,
+        )
+        return mf_json
 
     def get_start_location(self):
         """
@@ -612,12 +766,12 @@ class Trajectory:
         t_diff_at = t - prev_row.name
         line = LineString(
             [
-                prev_row[self.get_geom_column_name()],
-                next_row[self.get_geom_column_name()],
+                prev_row[self.get_geom_col()],
+                next_row[self.get_geom_col()],
             ]
         )
         if t_diff == 0 or line.length == 0:
-            return prev_row[self.get_geom_column_name()]
+            return prev_row[self.get_geom_col()]
         interpolated_position = line.interpolate(t_diff_at / t_diff * line.length)
         return interpolated_position
 
@@ -672,9 +826,9 @@ class Trajectory:
         else:
             row = self.get_row_at(t, method)
             try:
-                return row[self.get_geom_column_name()][0]
+                return row[self.get_geom_col()][0]
             except TypeError:
-                return row[self.get_geom_column_name()]
+                return row[self.get_geom_col()]
 
     def get_linestring_between(self, t1, t2, method="interpolated"):
         """
@@ -696,26 +850,22 @@ class Trajectory:
         """
         if method not in ["interpolated", "within"]:
             raise ValueError(
-                "Invalid split method {}. Must be one of [interpolated, within]".format(
-                    method
-                )
+                f"Invalid split method {method}. Must be one of [interpolated, within]"
             )
         if method == "interpolated":
-            st_range = SpatioTemporalRange(
+            st_range = STRange(
                 self.get_position_at(t1), self.get_position_at(t2), t1, t2
             )
             temp_df = create_entry_and_exit_points(self, st_range)
             temp_df = temp_df[t1:t2]
-            return point_gdf_to_linestring(temp_df, self.get_geom_column_name())
+            return point_gdf_to_linestring(temp_df, self.get_geom_col())
         else:
             try:
                 return point_gdf_to_linestring(
-                    self.get_segment_between(t1, t2).df, self.get_geom_column_name()
+                    self.get_segment_between(t1, t2).df, self.get_geom_col()
                 )
             except RuntimeError:
-                raise RuntimeError(
-                    "Cannot generate linestring between {0} and {1}".format(t1, t2)
-                )
+                raise RuntimeError(f"Cannot generate linestring between {t1} and {t2}")
 
     def get_segment_between(self, t1, t2):
         """
@@ -733,37 +883,28 @@ class Trajectory:
         Trajectory
             Extracted trajectory segment
         """
-        segment = Trajectory(self.df[t1:t2], "{}_{}".format(self.id, t1), parent=self)
+        segment = Trajectory(
+            self.df[t1:t2],
+            f"{self.id}_{t1}",
+            parent=self,
+            traj_id_col=self.get_traj_id_col(),
+        )
         if not segment.is_valid():
             raise RuntimeError(
-                "Failed to extract valid trajectory segment between {} and {}".format(
-                    t1, t2
-                )
+                f"Failed to extract valid trajectory segment between {t1} and {t2}"
             )
         return segment
 
     def _compute_distance(self, row, conversion):
         pt0 = row["prev_pt"]
-        pt1 = row[self.get_geom_column_name()]
+        pt1 = row[self.get_geom_col()]
         if not isinstance(pt0, Point):
             return 0.0
         if not isinstance(pt1, Point):
-            raise ValueError("Invalid trajectory! Got {} instead of point!".format(pt1))
+            raise ValueError(f"Invalid trajectory! Got {pt1} instead of point!")
         if pt0 == pt1:
             return 0.0
-        if self.is_latlon:
-            dist_computed = (
-                measure_distance_geodesic(pt0, pt1)
-                * conversion.crs
-                / conversion.distance
-            )
-        else:  # The following distance will be in CRS units that might not be meters!
-            dist_computed = (
-                measure_distance_euclidean(pt0, pt1)
-                * conversion.crs
-                / conversion.distance
-            )
-        return dist_computed
+        return measure_distance(pt0, pt1, self.is_latlon, conversion)
 
     def _add_prev_pt(self, force=True):
         """
@@ -778,78 +919,29 @@ class Trajectory:
         Return the length of the trajectory.
 
         Length is calculated using CRS units, except if the CRS is geographic
-        (e.g. EPSG:4326 WGS84) then length is calculated in metres.
+        (e.g. EPSG:4326 WGS84) then length is calculated in meters.
 
         If units have been declared:
-            For geographic projections, in declared units
-            For known CRS units, in declared units
-            For unknown CRS units, in declared units as if CRS is in meters
+
+        - For geographic projections, in declared units
+        - For known CRS units, in declared units
+        - For unknown CRS units, in declared units as if CRS is in meters
 
         Parameters
         ----------
-        units : str
+        units : tuple(str)
             Units in which to calculate length values (default: CRS units)
-            Allowed:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Returns
         -------
         float
             Length of the trajectory
         """
-        pt_tuples = [(pt.y, pt.x) for pt in self.df.geometry.tolist()]
-        if self.is_latlon:
-            length = geodesic(*pt_tuples).m
-        else:  # The following distance will be in CRS units that might not be meters!
-            length = LineString(pt_tuples).length
 
         conversion = get_conversion(units, self.crs_units)
-
-        return length / conversion.distance
+        return measure_length(self.df.geometry, self.is_latlon, conversion)
 
     def get_direction(self):
         """
@@ -890,7 +982,7 @@ class Trajectory:
 
     def _compute_heading(self, row):
         pt0 = row["prev_pt"]
-        pt1 = row[self.get_geom_column_name()]
+        pt1 = row[self.get_geom_col()]
         if not isinstance(pt0, Point):
             return 0.0
         if pt0 == pt1:
@@ -910,34 +1002,22 @@ class Trajectory:
 
     def _compute_speed(self, row, conversion):
         pt0 = row["prev_pt"]
-        pt1 = row[self.get_geom_column_name()]
+        pt1 = row[self.get_geom_col()]
         if not isinstance(pt0, Point):
             return 0.0
         if not isinstance(pt1, Point):
-            raise ValueError("Invalid trajectory! Got {} instead of point!".format(pt1))
+            raise ValueError(f"Invalid trajectory! Got {pt1} instead of point!")
         if pt0 == pt1:
             return 0.0
-        if self.is_latlon:
-            dist_computed = (
-                measure_distance_geodesic(pt0, pt1)
-                * conversion.crs
-                / conversion.distance
-            )
-        else:  # The following distance will be in CRS units that might not be meters!
-            dist_computed = (
-                measure_distance_euclidean(pt0, pt1)
-                * conversion.crs
-                / conversion.distance
-            )
-        return dist_computed / row["delta_t"].total_seconds() * conversion.time
+        return get_speed2(pt0, pt1, row["delta_t"], self.is_latlon, conversion)
 
     def _connect_prev_pt_and_geometry(self, row):
         pt0 = row["prev_pt"]
-        pt1 = row[self.get_geom_column_name()]
+        pt1 = row[self.get_geom_col()]
         if not isinstance(pt0, Point):
             return None
         if not isinstance(pt1, Point):
-            raise ValueError("Invalid trajectory! Got {} instead of point!".format(pt1))
+            raise ValueError(f"Invalid trajectory! Got {pt1} instead of point!")
         if pt0 == pt1:
             # to avoid intersection issues with zero length lines
             pt1 = translate(pt1, 0.00000001, 0.00000001)
@@ -958,6 +1038,7 @@ class Trajectory:
                 f"Use overwrite=True to overwrite exiting values."
             )
         self.df[TRAJ_ID_COL_NAME] = self.id
+        return self
 
     def add_direction(self, overwrite=False, name=DIRECTION_COL_NAME):
         """
@@ -971,6 +1052,8 @@ class Trajectory:
         ----------
         overwrite : bool
             Whether to overwrite existing direction values (default: False)
+        name : str
+            Name of the direction column (default: "direction")
         """
         self.direction_col_name = name
         if self.direction_col_name in self.df.columns and not overwrite:
@@ -982,8 +1065,10 @@ class Trajectory:
         self._add_prev_pt()
         self.df[name] = self.df.apply(self._compute_heading, axis=1)
         # set the direction in the first row to the direction of the second row
-        self.df.at[self.get_start_time(), name] = self.df.iloc[1][name]
+        t0 = self.df.index.min().to_datetime64()
+        self.df.at[t0, name] = self.df.iloc[1][name]
         self.df.drop(columns=["prev_pt"], inplace=True)
+        return self
 
     def add_angular_difference(
         self,
@@ -1006,8 +1091,8 @@ class Trajectory:
                 f"name arg."
             )
         # Avoid computing direction again if already computed
-        direction_column_name = self.get_direction_column_name()
-        if direction_column_name in self.df.columns:
+        direction_col = self.get_direction_col()
+        if direction_col in self.df.columns:
             direction_exists = True
             temp_df = self.df.copy()
         else:
@@ -1015,81 +1100,42 @@ class Trajectory:
             self.add_direction(name=DIRECTION_COL_NAME)
             temp_df = self.df.copy()
 
-        temp_df["prev_" + direction_column_name] = temp_df[
-            direction_column_name
-        ].shift()
+        temp_df["prev_" + direction_col] = temp_df[direction_col].shift()
         self.df[name] = temp_df.apply(self._compute_angular_difference, axis=1)
         # set the first row to be 0
-        self.df.at[self.get_start_time(), name] = 0.0
+        t0 = self.df.index.min().to_datetime64()
+        self.df.at[t0, name] = 0.0
         if not direction_exists:
             self.df.drop(columns=[DIRECTION_COL_NAME], inplace=True)
+        return self
 
     def add_distance(self, overwrite=False, name=DISTANCE_COL_NAME, units=None):
         """
         Add distance column and values to the trajectory's DataFrame.
 
-        Adds a column with the distance to each point from the previous:
-            If no units have been declared:
-                For geographic projections (e.g. EPSG:4326 WGS84), in meters
-                For other projections, in CRS units
-            If units have been declared:
-                For geographic projections, in declared units
-                For known CRS units, in declared units
-                For unknown CRS units, in declared units as if CRS is in meters
+        Distance values are computed between the current point and the previous:
+
+        If no units have been declared:
+
+        - For geographic projections (e.g. EPSG:4326 WGS84), in meters
+        - For other projections, in CRS units
+
+        If units have been declared:
+
+        - For geographic projections, in declared units
+        - For known CRS units, in declared units
+        - For unknown CRS units, in declared units as if CRS is in meters
 
         Parameters
         ----------
         overwrite : bool
             Whether to overwrite existing distance values (default: False)
-
+        name : str
+            Name of the distance column (default: "distance")
         units : str
             Units in which to calculate distance values (default: CRS units)
-            Allowed:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Examples
         ----------
@@ -1124,20 +1170,25 @@ class Trajectory:
             )
         conversion = get_conversion(units, self.crs_units)
         self.df = self._get_df_with_distance(conversion, name)
+        return self
 
     def add_speed(self, overwrite=False, name=SPEED_COL_NAME, units=UNITS()):
         """
         Add speed column and values to the trajectory's DataFrame.
 
-        Adds a column with the speed to each point from the previous:
-             If no units have been declared:
-                 For geographic projections, in meters per second
-                 For other projections, in CRS units per second
-             If units have been declared:
-                 For geographic projections, in declared units
-                 For known CRS units, in declared units
-                 For unknown CRS units, in declared units as if CRS distance
-                 units are meters
+        Speed values are computed between the current point and the previous:
+
+        If no units have been declared:
+
+        - For geographic projections, in meters per second
+        - For other projections, in CRS units per second
+
+        If units have been declared:
+
+        - For geographic projections, in declared units
+        - For known CRS units, in declared units
+        - For unknown CRS units, in declared units as if CRS distance
+          units are meters
 
         Parameters
         ----------
@@ -1145,67 +1196,17 @@ class Trajectory:
             Whether to overwrite existing speed values (default: False)
         name : str
             Name of the speed column (default: "speed")
-        units : tuple
+        units : tuple(str)
             Units in which to calculate speed
+
             distance : str
                 Abbreviation for the distance unit
                 (default: CRS units, or metres if geographic)
             time : str
                 Abbreviation for the time unit (default: seconds)
 
-            Allowed distance units:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
-
-            Allowed time units:
-                "s": seconds
-                "min": minutes
-                "h": hours
-                "d": days
-                "a": years
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Examples
         ----------
@@ -1240,6 +1241,7 @@ class Trajectory:
             )
         conversion = get_conversion(units, self.crs_units)
         self.df = self._get_df_with_speed(conversion, name)
+        return self
 
     def add_acceleration(
         self, overwrite=False, name=ACCELERATION_COL_NAME, units=UNITS()
@@ -1247,19 +1249,23 @@ class Trajectory:
         """
         Add acceleration column and values to the trajectory's DataFrame.
 
-        Adds a column with the acceleration to each point from the previous:
-             If no units have been declared:
-                 For geographic projections, in meters per second squared
-                 For other projections, in CRS units per second squared
-             If units have been declared:
-                 For geographic projections, using declared units
-                 For known CRS units, using declared units
-                 For unknown CRS units, using declared units as if CRS distance
-                 units are meters
-                 If only distance units are declared, returns
-                     distance per second squared
-                 If distance and one time unit declared, returns
-                     distance/time per second
+        Acceleration values are computed between the current point and the previous:
+
+        If no units have been declared:
+
+        - For geographic projections, in meters per second squared
+        - For other projections, in CRS units per second squared
+
+        If units have been declared:
+
+        - For geographic projections, using declared units
+        - For known CRS units, using declared units
+        - For unknown CRS units, using declared units as if CRS distance
+          units are meters
+        - If only distance units are declared, returns
+          distance per second squared
+        - If distance and one time unit declared, returns
+          distance/time per second
 
         Parameters
         ----------
@@ -1267,8 +1273,9 @@ class Trajectory:
             Whether to overwrite existing speed values (default: False)
         name : str
             Name of the acceleration column (default: "acceleration")
-        units : tuple
+        units : tuple(str)
             Units in which to calculate acceleration
+
             distance : str
                 Abbreviation for the distance unit
                 (default: CRS units, or metres if geographic)
@@ -1277,59 +1284,8 @@ class Trajectory:
             time2 : str
                 Abbreviation for the second time unit (default: seconds)
 
-            Allowed distance units:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
-
-            Allowed time units:
-                "s": seconds
-                "min": minutes
-                "h": hours
-                "d": days
-                "a": years
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Examples
         ----------
@@ -1364,6 +1320,7 @@ class Trajectory:
             )
         conversion = get_conversion(units, self.crs_units)
         self.df = self._get_df_with_acceleration(conversion, name)
+        return self
 
     def add_timedelta(self, overwrite=False, name=TIMEDELTA_COL_NAME):
         """
@@ -1387,6 +1344,7 @@ class Trajectory:
                 f"name arg."
             )
         self.df = self._get_df_with_timedelta(name)
+        return self
 
     def _get_df_with_timedelta(self, name=TIMEDELTA_COL_NAME):
         temp_df = self.df.copy()
@@ -1404,7 +1362,8 @@ class Trajectory:
         except ValueError as e:
             raise e
         # set the distance in the first row to zero
-        temp_df.at[self.get_start_time(), name] = 0
+        t0 = self.df.index.min().to_datetime64()
+        temp_df.at[t0, name] = 0
         temp_df = temp_df.drop(columns=["prev_pt"])
         return temp_df
 
@@ -1418,7 +1377,8 @@ class Trajectory:
         except ValueError as e:
             raise e
         # set the speed in the first row to the speed of the second row
-        temp_df.at[self.get_start_time(), name] = temp_df.iloc[1][name]
+        t0 = self.df.index.min().to_datetime64()
+        temp_df.at[t0, name] = temp_df.iloc[1][name]
         temp_df = temp_df.drop(columns=["prev_pt", "delta_t"])
         return temp_df
 
@@ -1431,7 +1391,8 @@ class Trajectory:
         )
         # set the acceleration in the first row to the acceleration of the
         # second row
-        temp_df.at[self.get_start_time(), name] = temp_df.iloc[1][name]
+        t0 = self.df.index.min().to_datetime64()
+        temp_df.at[t0, name] = temp_df.iloc[1][name]
         return temp_df.drop(columns=["speed_temp"])
 
     def intersects(self, polygon):
@@ -1455,9 +1416,10 @@ class Trajectory:
         https://shapely.readthedocs.io/en/stable/manual.html#object.distance).
 
         If units have been declared:
-            For geographic projections, in declared units
-            For known CRS units, in declared units
-            For unknown CRS units, in declared units as if CRS is in meters
+
+        - For geographic projections, in declared units
+        - For known CRS units, in declared units
+        - For unknown CRS units, in declared units as if CRS is in meters
 
         Parameters
         ----------
@@ -1466,52 +1428,8 @@ class Trajectory:
 
         units : str
             Units in which to calculate distance values (default: CRS units)
-            Allowed:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Returns
         -------
@@ -1527,9 +1445,8 @@ class Trajectory:
         if type(other) == Trajectory:
             other = other.to_linestring()
 
-        dist = self.to_linestring().distance(other)
         conversion = get_conversion(units, self.crs_units)
-        return dist / conversion.distance
+        return measure_distance_line(self.to_linestring(), other, conversion)
 
     def hausdorff_distance(self, other, units=UNITS()):
         """
@@ -1540,9 +1457,10 @@ class Trajectory:
         the other geometry.
 
         If units have been declared:
-            For geographic projections, in declared units
-            For known CRS units, in declared units
-            For unknown CRS units, in declared units as if CRS is in meters
+
+        - For geographic projections, in declared units
+        - For known CRS units, in declared units
+        - For unknown CRS units, in declared units as if CRS is in meters
 
         Parameters
         ----------
@@ -1551,52 +1469,8 @@ class Trajectory:
 
         units : str
             Units in which to calculate distance values (default: CRS units)
-            Allowed:
-                "km": Kilometer
-                "m": metre
-                "dm": Decimeter
-                "cm": Centimeter
-                "mm": Millimeter
-                "nm": International Nautical Mile
-                "inch": International Inch
-                "ft": International Foot
-                "yd": International Yard
-                "mi": International Statute Mile
-                "link": International Link
-                "chain": International Chain
-                "fathom": International Fathom
-                "british_ft": British foot (Sears 1922)
-                "british_yd": British yard (Sears 1922)
-                "british_chain_sears": British chain (Sears 1922)
-                "british_link_sears": British link (Sears 1922)
-                "sears_yd": Yard (Sears)
-                "link_sears": Link (Sears)
-                "chain_sears": Chain (Sears)
-                "british_ft_sears_truncated": British foot (Sears 1922 truncated)
-                "british_chain_sears_truncated": British chain (Sears 1922 truncated)
-                "british_chain_benoit": British chain (Benoit 1895 B)
-                "chain_benoit": Chain (Benoit)
-                "link_benoit": Link (Benoit)
-                "clarke_yd": Clarke's yard
-                "clarke_ft": Clarke's Foot
-                "clarke_link": Clarke's link
-                "clarke_chain": Clarke's chain
-                "british_ft_1936": British foot (1936)
-                "gold_coast_ft": Gold Coast foot
-                "rod": Rod
-                "furlong": Furlong
-                "german_m": German legal metre
-                "survey_in": US survey inch
-                "survey_ft": US survey foot
-                "survey_yd": US survey yard
-                "survey_lk": US survey link
-                "survey_ch": US survey chain
-                "survey_mi": US survey mile
-                "indian_yd": Indian Yard
-                "indian_ft": Indian Foot
-                "indian_ft_1937": Indian Foot 1937
-                "indian_ft_1962": Indian Foot 1962
-                "indian_ft_1975": Indian Foot 1975
+            For more info, check the list of supported units at
+            https://movingpandas.org/units
 
         Returns
         -------
@@ -1642,7 +1516,7 @@ class Trajectory:
 
     def intersection(self, feature, point_based=False):
         """
-        Return the trajectory segments that intersects the given feature.
+        Return the trajectory segments that intersects the given polygon feature.
 
         Feature attributes are appended to the trajectory's DataFrame.
 
@@ -1693,7 +1567,7 @@ class Trajectory:
         """
         self.df[column] = self.df[column].shift(offset, freq="1min")
 
-    def _to_line_df(self):
+    def _to_line_df(self, columns=None):
         """
         Convert trajectory data GeoDataFrame of points to GeoDataFrame of lines
         that connect consecutive points.
@@ -1703,7 +1577,10 @@ class Trajectory:
         line_df : GeoDataFrame
             GeoDataFrame of line segments
         """
-        line_df = self.df.copy()
+        if columns is None:
+            line_df = self.df.copy()
+        else:
+            line_df = self.df[columns].copy()
         line_df["prev_pt"] = line_df.geometry.shift()
         line_df["t"] = self.df.index
         line_df["prev_t"] = line_df["t"].shift()
@@ -1720,4 +1597,7 @@ class Trajectory:
             The polygon or line (in case of only two points)
             of the Minimum Convex Polygon
         """
-        return self.df.geometry.unary_union.convex_hull
+        try:
+            return self.df.geometry.union_all().convex_hull
+        except AttributeError:
+            return self.df.geometry.unary_union.convex_hull

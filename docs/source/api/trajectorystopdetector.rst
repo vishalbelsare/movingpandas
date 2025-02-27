@@ -1,13 +1,11 @@
-MovingPandas.TrajectoryCleaner
+MovingPandas.TrajectoryStopDetector
 ===========================================
 
 .. automodule:: movingpandas
+    :members:
     :noindex:
 
-.. autoclass:: TrajectoryCleaner
+.. autoclass:: TrajectoryStopDetector
    :members:
 
    .. automethod:: __init__
-
-.. autoclass:: OutlierCleaner
-   :members:

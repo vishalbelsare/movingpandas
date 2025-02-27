@@ -10,11 +10,9 @@
 [![docs status](https://readthedocs.org/projects/movingpandas/badge/?version=main)](https://movingpandas.readthedocs.io/en/main/)
 [![codecov](https://codecov.io/gh/movingpandas/movingpandas/branch/main/graph/badge.svg)](https://codecov.io/gh/movingpandas/movingpandas)
 [![DOI](https://zenodo.org/badge/161995245.svg)](https://zenodo.org/badge/latestdoi/161995245)
-[![pyOpenSci](https://camo.githubusercontent.com/63ff31cdb80a06361e53ac2b9ac0d184118ebd0b/68747470733a2f2f74696e7975726c2e636f6d2f7932326e62387570)](https://github.com/pyOpenSci/software-review/issues/18)
+[![pyOpenSci](https://tinyurl.com/y22nb8up)](https://github.com/pyOpenSci/software-review/issues/18)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![StandWithUkraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://github.com/vshymanskyy/StandWithUkraine/blob/main/docs/README.md)
-
-[![Twitter Follow](https://img.shields.io/twitter/follow/MovingPandasOrg)](https://twitter.com/MovingPandasOrg)
 [![Mastodon Follow](https://img.shields.io/mastodon/follow/109434720057484377?domain=https%3A%2F%2Ffosstodon.org)](https://fosstodon.org/@movingpandas)
 
 [![SWUbanner](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner2-direct.svg)](https://github.com/vshymanskyy/StandWithUkraine/blob/main/docs/README.md)
@@ -22,7 +20,9 @@
 
 <img align="right" src="https://movingpandas.github.io/movingpandas/assets/img/movingpandas.png">
 
-MovingPandas implements a Trajectory class and corresponding methods based on **[GeoPandas](https://geopandas.org)**.
+MovingPandas is a Python library for movement data exploration and analysis.
+
+MovingPandas provides trajectory data structures and functions for handling movement data based on Pandas, **[GeoPandas](https://geopandas.org)**, and HoloViz.
 
 Visit **[movingpandas.org](http://movingpandas.org)** for details! 
 
@@ -33,40 +33,58 @@ To try the cutting-edge dev version, use [this MyBinder link](https://mybinder.o
 
 ## Documentation
 
-The official documentation is hosted on **[ReadTheDocs](https://movingpandas.readthedocs.io)**
+We recommend starting your MovingPandas journey with the **[tutorial notebooks on the official homepage](https://movingpandas.org/examples)**
+
+The official API documentation is hosted on **[ReadTheDocs](https://movingpandas.readthedocs.io)**
 
 
 ## Examples
 
-### Trajectory plots [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-lightgrey.svg)](https://github.com/movingpandas/movingpandas-examples/blob/main/2-analysis-examples/bird-migration.ipynb)
 
-Create interactive trajectory plots, including multiple linked plots with ease
+### Trajectory plots 
+
+Create interactive trajectory plots using Folium and Geoviews with ease
+
+![image](https://github.com/user-attachments/assets/a62b3a4e-e5fc-4d96-b67d-e03dff29a20e)
+
+
+#### Including multiple linked plots  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/2-analysis-examples/bird-migration.html)
 
 ![movingpandas_animated](https://user-images.githubusercontent.com/590385/137953765-33f9ce1b-037c-4c86-82b2-0620de5ca28f.gif)
 
 
-### Stop detection  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-lightgrey.svg)](https://github.com/movingpandas/movingpandas-examples/blob/main/1-tutorials/8-detecting-stops.ipynb)
+#### For all types of tracking data, e.g. [video-based trajectories](https://anitagraser.com/2023/05/21/analyzing-video-based-bicycle-trajectories/)
+
+![Bicycle tracks from object tracking in videos](https://github.com/movingpandas/movingpandas/assets/590385/c4a0f682-bb94-4b15-ac03-a4d854008937)
+
+
+#### Including plots in custom projections [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/2-analysis-examples/iceberg.html)
+
+![MovingPandas Iceberg trajectory in custom SouthPolarStereo projection](https://github.com/movingpandas/movingpandas/assets/590385/334304eb-da78-4779-b46b-5492fd54d8ed)
+
+
+### Stop detection  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/1-tutorials/8-detecting-stops.html)
 
 Detect stops in trajectories, extract them as points or segments, and use them to split trajectories
 
 ![movingpandas_stop_detection](https://user-images.githubusercontent.com/590385/236671475-a37aa046-76d6-48b9-ae6d-d1358a591953.png)
 
 
-### Trajectory generalization  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-lightgrey.svg)](https://github.com/movingpandas/movingpandas-examples/blob/main/1-tutorials/7-generalizing-trajectories.ipynb)
+### Trajectory generalization  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/1-tutorials/7-generalizing-trajectories.html)
 
 Generalize trajectories using spatial, temporal, and spatiotemporal methods
 
 ![movingpandas_generalize](https://user-images.githubusercontent.com/590385/142756559-012a15fe-736c-474c-b244-0ee02090d592.gif)
 
 
-### Trajectory cleaning & smoothing  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-lightgrey.svg)](https://github.com/movingpandas/movingpandas-examples/blob/main/1-tutorials/10-smoothing-trajectories.ipynb)
+### Trajectory cleaning & smoothing  [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/1-tutorials/10-smoothing-trajectories.html)
 
 Clean and sooth trajectories by removing outliers and applying Kalman filters
 
 ![movingpandas smooth](https://user-images.githubusercontent.com/590385/184359439-52eca394-5df6-40b2-a5b3-54543c3ccf34.png)
 
 
-### Trajectory aggregation [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-lightgrey.svg)](https://github.com/movingpandas/movingpandas-examples/blob/main/1-tutorials/9-aggregating-trajectories.ipynb)
+### Trajectory aggregation [![View Jupyter Notebook](https://img.shields.io/badge/view-Jupyter%20notebook-white.svg)](https://movingpandas.github.io/movingpandas-website/1-tutorials/9-aggregating-trajectories.html)
 
 Aggregate trajectories to explore larger patterns
 
@@ -75,7 +93,7 @@ Aggregate trajectories to explore larger patterns
 
 ## Installation
 
-MovingPandas for Python >= 3.7 and all it's dependencies are available from [conda-forge](https://anaconda.org/conda-forge/movingpandas) and can be installed using 
+MovingPandas for Python >= 3.7 and all its dependencies are available from [conda-forge](https://anaconda.org/conda-forge/movingpandas) and can be installed using 
 
 `conda install -c conda-forge movingpandas`
  
@@ -85,9 +103,9 @@ MovingPandas for Python >= 3.7 and all it's dependencies are available from [con
 
 
 Note that it is **NOT recommended** to install MovingPandas from [PyPI](https://pypi.org/project/movingpandas/)!
-If you're on Windows or Mac, many GeoPandas / MovingPandas dependencies cannot be pip installed 
+If you are using Windows or Mac, many GeoPandas / MovingPandas dependencies may not install correctly with pip
 (for details see the corresponding notes in the [GeoPandas documentation](https://geopandas.readthedocs.io/en/latest/getting_started/install.html)).
-On Ubuntu, pip install fails on cartopy with "Proj 4.9.0 must be installed".
+On Ubuntu, pip install may fail, e.g. on cartopy with "Proj 4.9.0 must be installed".
 
 
 ## Development installation 
@@ -95,42 +113,11 @@ On Ubuntu, pip install fails on cartopy with "Proj 4.9.0 must be installed".
 Use the following steps to run the notebooks using the current development version:
 
 
-### Using conda
-
-**Linux/Mac**:  
+### Using conda / mamba
 
 ```
 conda env create -f environment.yml
 ```
-
-**Windows**: 
-
-```
-conda config --add channels conda-forge
-conda config --add channels defaults
-conda config --set channel_priority strict
-conda env create -f environment.yml
-```
-
-*On Windows, because conda-forge relies on some package built with defaults blas (like scipy) one must use the defaults channel on top of conda-forge and activate conda's new strict channel feature.* Source: https://github.com/conda-forge/gdal-feedstock/issues/269#issuecomment-473661530
-
-
-### Using Anaconda
-
-1. Install Anaconda
-2. Clone the movingpandas repository
-3. In Anaconda Navigator | Environments | Import select the movingpandas environment.yml from the cloned directory:
-
-![image](https://user-images.githubusercontent.com/590385/62143367-2db14c00-b2f0-11e9-8cb9-fb7993b7f62e.png)
-
-4. Wait until the environment is ready, then change to the Home tab and install Jupyter notebooks into the movingpandas environment
-5. Launch Jupyter notebooks and navigate to the `movingpandas/tutorials` directory to execute them
-6. Now you can run the notebooks, experiment with the code and adjust it to your own data
-
-Known issues:
-
-* On Windows, importing rasterio can lead to DLL errors. If this happens, downgrade the rasterio version to 1.0.13.
-
 
 ### Develop mode
 
@@ -182,14 +169,15 @@ Please cite [[0]](#publications) when using MovingPandas in your research and re
 ```
 @article{graser_movingpandas_2019,
 	title = {{MovingPandas}: {Efficient} {Structures} for {Movement} {Data} in {Python}},
-	volume = {1},
+	volume = {7},
+	number = {1},
 	issn = {2308-1708, 2308-1708},
 	shorttitle = {{MovingPandas}},
 	url = {https://hw.oeaw.ac.at?arp=0x003aba2b},
 	doi = {10.1553/giscience2019_01_s54},
 	language = {en},
 	urldate = {2023-04-19},
-	journal = {GI\_Forum},
+	journal = {GI\_Forum ‒ Journal of Geographic Information Science},
 	author = {Graser, Anita},
 	year = {2019},
 	pages = {54--68},
@@ -204,27 +192,44 @@ Please cite [[0]](#publications) when using MovingPandas in your research and re
 ### Scientific publications using MovingPandas
 
 * [Graser, A. & Dragaschnig, M. (2020). Open Geospatial Tools for Movement Data Exploration. KN ‒ Journal of Cartography and Geographic Information, 70(1), 3-10. doi:10.1007/s42489-020-00039-y.](https://link.springer.com/article/10.1007/s42489-020-00039-y) - *"For example, Fig. 4 shows how MovingPandas can be used to split a trajectory into subtrajectories and plot the results."*
-* [Kirkland, L. A., de Waal, A., & de Villiers, J. P. (2020). Evaluation of a Pure-Strategy Stackelberg Game for Wildlife Security in a Geospatial Framework. In Southern African Conference for Artificial Intelligence Research (pp. 101-118). Springer, Cham.](https://www.researchgate.net/publication/347786937_Evaluation_of_a_Pure-Strategy_Stackelberg_Game_for_Wildlife_Security_in_a_Geospatial_Framework) - *"The movingpandas Python library [12] is utilised to store trajectories which can be easily analysed
-and plotted after the simulation."*
+* [Kirkland, L. A., de Waal, A., & de Villiers, J. P. (2020). Evaluation of a Pure-Strategy Stackelberg Game for Wildlife Security in a Geospatial Framework. In Southern African Conference for Artificial Intelligence Research (pp. 101-118). Springer, Cham.](https://www.researchgate.net/publication/347786937_Evaluation_of_a_Pure-Strategy_Stackelberg_Game_for_Wildlife_Security_in_a_Geospatial_Framework) - *"The movingpandas Python library [12] is utilised to store trajectories which can be easily analysed and plotted after the simulation."*
 * [Depellegrin, D., Bastianini, M., Fadini, A., & Menegon, S. (2020). The effects of COVID-19 induced lockdown measures on maritime settings of a coastal region. Science of the Total Environment, 740, 140123.](https://doi.org/10.1016/j.scitotenv.2020.140123) - *"We combined the Python libraries scikit-Mobility (Pappalardo et al., 2019) and MovingPandas (Graser, 2019) to pre-process position data received from the AAOT and to reconstruct and represent the vessel trajectory in the lockdown assessment period."*
 * [Graser, A. (2021). An exploratory data analysis protocol for identifying problems in continuous movement data. Journal of Location Based Services. doi:10.1080/17489725.2021.1900612.](https://doi.org/10.1080/17489725.2021.1900612) - MovingPandas is used to plot individual trajectories colored by movement speeed. 
 * [Mehri, S., Alesheikh, A. A., & Basiri, A. (2021). A Contextual Hybrid Model for Vessel Movement Prediction. IEEE Access, 9, 45600-45613.](https://ieeexplore.ieee.org/abstract/document/9380635/) - *"AIS messages are converted into trajectories by a Python library named, MovingPandas"*
 * [Soularidis, A., & Kotis, K. (2022). Semantic Modeling and Reconstruction of Drones’ Trajectories. In European Semantic Web Conference (pp. 158-162). Springer, Cham.](https://2022.eswc-conferences.org/wp-content/uploads/2022/05/pd_Soularidis_et_al_paper_192.pdf) - *"The goal of this paper is to present our position related to the semantic trajectories of swarms of drones, towards proposing methods for extending MovingPandas, a widely used open-source trajectory analytics and visualization tool."*
-* [Elayam, M. M., Ray, C., & Claramunt, C. (2022). A hierarchical graph-based model for mobility data representation and analysis. Data & Knowledge Engineering, 102054.](https://www.sciencedirect.com/science/article/abs/pii/S0169023X22000532) - *"The implementation combines several open source tools such as Python, MovingPandas library, Uber H3 index, Neo4j graph database management system ..."*
+* [Elayam, M. M., Ray, C., & Claramunt, C. (2022). A hierarchical graph-based model for mobility data representation and analysis. Data & Knowledge Engineering, 102054.](https://www.sciencedirect.com/science/article/abs/pii/S0169023X22000532) - *"The implementation combines several open source tools such as Python, MovingPandas library, Uber H3 index, Neo4j graph database management system"*
 * [Kotis, K., & Soularidis, A. (2023). ReconTraj4Drones: A Framework for the Reconstruction and Semantic Modeling of UAVs’ Trajectories on MovingPandas. Applied Sciences, 13(1), 670.](https://www.mdpi.com/2076-3417/13/1/670) - *"This framework extends MovingPandas, a widely used and open-source trajectory analytics and visualization tool."*
-* [Šakan, D., Žuškin, S., Rudan, I., & Brčić, D. (2023). Container Ship Fleet Route Evaluation and Similarity Measurement between Two Shipping Line Ports. Journal of Marine Science and Engineering, 11(2), 400.](https://www.mdpi.com/2130602) - *"To create routes, we used the MovingPandas library ..."* (Horizon Europe project no. 101077026 SafeNav).
-
+* [Šakan, D., Žuškin, S., Rudan, I., & Brčić, D. (2023). Container Ship Fleet Route Evaluation and Similarity Measurement between Two Shipping Line Ports. Journal of Marine Science and Engineering, 11(2), 400.](https://www.mdpi.com/2130602) - *"To create routes, we used the MovingPandas library"* (Horizon Europe project no. 101077026 SafeNav).
+* [Sheehan, C., & Green, T. (2023) ChargeUp! Data Swap!. Using data from battery swapping e-motorcycles in Nairobi to assess impacts and plan infrastructure. Imperial College London. White paper.](https://p4gpartnerships.org/sites/default/files/2023-06/341%20IMP%20Energy%20futures%20ChargeUp_Data%20Swap_White%20paper_AC2.pdf) - *"the raw GPS co-ordinates and their timestamps were processed to detect individual trajectories (trips) for each battery using MovingPandas"*
+* [Gu, C., Liu, L., Zhang, Y., Wei, B., Cui, B., & Gong, D. (2023). Understanding the spatial heterogeneity of grazing pressure in the Three-River-Source Region on the Tibetan Plateau. Journal of Geographical Sciences, 33(8), 1660-1680.](https://link.springer.com/article/10.1007/s11442-023-2147-1) - *"we used MovingPandas, a python package for movement data analysis, to obtain the daily moving distance and home range information"*
+* [Duarte, M. M. G., & Sakr, M. (2023). A Benchmark of Existing Tools for Outlier Detection and Cleaning in Trajectories.](https://www.researchsquare.com/article/rs-3356633/v1) - *"The benchmark includes MovingPandas, Scikit-mobility, Scikit-learn, Ptrail, PyMove, movetk, MEOS, Argosﬁlter, Stmove and MOutlier."* (Horizon Europe project no. 101070279 MobiSpaces). 
+* [Lei, J., Chu, Z., Wu, Y., Liu, X., Luo, M., He, W., & Liu, C. (2024). Predicting vessel arrival times on inland waterways: A tree-based stacking approach. Ocean Engineering, 294, 116838.](https://www.sciencedirect.com/science/article/abs/pii/S0029801824001756) - *"the historical voyages are processed with the movingpandas library and stored as GeoDataFrames"*
+* [Golze, J., & Sester, M. (2024). Determining user specific semantics of locations extracted from trajectory data. Transportation Research Procedia, 78, 215-221.](https://www.sciencedirect.com/science/article/pii/S2352146524000814) - *"stop points are extracted from the GPS trajectories using the Python framework MovingPandas"*
+* [Van Deursen, J., Creany, N., Smith, B., Freimund, W., Avgar, T., & Monz, C. A. (2024). Recreation specialization: Resource selection functions as a predictive tool for protected area recreation management. Applied Geography, 167, 103276.](https://www.sciencedirect.com/science/article/abs/pii/S014362282400081X) - *"GeoPandas and MovingPandas packages in Python were used to analyze the GPS data collected and calculate the thirteen STMs (spatio-temporal metrics)"*
+* [Wicaksono, S. B. (2024). From Data Cleaning to Predictive Models: A Strategic Approach to Analyzing Bus and Ship Trajectories. Master Thesis in Data Science, Department of Mathemetics, University of Padova.](https://thesis.unipd.it/handle/20.500.12608/69505) - *"we utilize the stop detection tools provided by MovingPandas"*
+* [Skåntorp, J., Rolfes, J., Haraldsson, R., Liu, X., Zhao, S., & Rothhämel, M. (2024). Data-driven bicycle driving cycles via mixed-integer programming. 10.13140/RG.2.2.19928.10240](http://dx.doi.org/10.13140/RG.2.2.19928.10240) - *"we utilized the Kalman filter from the MovingPandas library"*
+* [Hoffmann, V., Webert, J. H., Murray, B., & Graf, R. (2024). Data-driven construction of maritime traffic networks for AI-based route prediction. Journal of Physics: Conference Series, 2867.](https://iopscience.iop.org/article/10.1088/1742-6596/2867/1/012048) - *"Messages are converted to trajectories using MovingPandas"* (Horizon 2020 project no. 957237 VesselAI).
+* [Mehri, S., Hooshangi, N., & Mahdizadeh Gharakhanlou, N. (2025). A Novel Context-Aware Douglas–Peucker (CADP) Trajectory Compression Method. ISPRS International Journal of Geo-Information, 14(2), 58.](https://www.mdpi.com/2220-9964/14/2/58) - *"AIS messages are converted into trajectories using a Python library named MovingPandas"*
+* [Elkin-Frankston, S., McIntyre, J., Brunyé, T.T. et al. (2025). Beyond boundaries: a location-based toolkit for quantifying group dynamics in diverse contexts. Cogn. Research 10, 10 (2025).](https://doi.org/10.1186/s41235-025-00617-6) - *"we first segmented time periods when the group was in motion by identifying break periods using the stop detection feature from the MovingPandas Python package"*
+* [Koszewski, K., Olszewski, R., Pałka, P. et al. (2025). Utilizing IoT Sensors and Spatial Data Mining for Analysis of Urban Space Actors’ Behavior in University Campus Space Design. Sensors, 25(5), 1393.](https://doi.org/10.3390/s25051393) - *"trajectories were processed by the MovingPandas Python library, which offers several valuable processing algorithms, like calculation of velocity, direction of movement, intersections, as well as enabling easy data exchange with other GIS tools using built-in exporters" & "One useful solution turned out to be the MovingPandas’ built-in TrajectoryStopDetector"*
 
 [Full Google Scholar list](https://scholar.google.com/scholar?oi=bibs&hl=en&cites=10366998261774464895)
+
+### Platforms using MovingPandas
+
+* [MoveApps](https://www.moveapps.org) the free analysis platform for animal tracking data hosted by the Max Planck Institute of Animal Behavior uses MovingPandas TrajectoryCollections as their [default Python IO type](https://docs.moveapps.org/#/create_py_app?id=io-types).
+* [AIT Mobility Observation Box](https://www.ait.ac.at/en/solutions/traffic-safety/safe/mobility-observation-box/) uses MovingPandas for processing video-based trajectories 
 
 
 ### Teaching materials referencing MovingPandas
 
 * [Aalto University. Spatial data science for sustainable development course](https://sustainability-gis.readthedocs.io/en/latest/lessons/L3/mobility-analytics.html)
-
+* [University of Trento. Geospatial Analysis and Representation for Data Science course for the master in Data Science](https://napo.github.io/geospatial_course_unitn/lessons/06-mobilty-analytics)
 
 ### Workshop videos
 
 * [Graser, A. (2019). Analyzing Movement Data with MovingPandas. Workshop at the OpenGeoHub summer school, Münster, Germany.](http://www.youtube.com/watch?v=qeLQfnpJV1g)
-
+* [Graser, A. (2023). Data Engineering for Mobility Data Science. Workshop at the OpenGeoHub summer school, Poznan, Poland.](https://youtu.be/roPF1oth2Pk)
+  
 [![WorkshopVideo](https://user-images.githubusercontent.com/590385/67161044-f08cb100-f356-11e9-8799-f972175ec7f4.png)](http://www.youtube.com/watch?v=qeLQfnpJV1g "Anita Graser: Analyzing movement data")
+[![ogh2023](https://github-production-user-asset-6210df.s3.amazonaws.com/590385/273573344-5aff5369-3db4-4d9e-9758-c9efccfd29a5.png)](https://youtu.be/roPF1oth2Pk)

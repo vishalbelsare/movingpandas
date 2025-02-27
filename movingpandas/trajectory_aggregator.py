@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from collections import Counter
+
 from pandas import DataFrame
 from geopandas import GeoDataFrame
 from shapely.geometry import LineString
@@ -9,8 +11,7 @@ from movingpandas.point_clusterer import PointClusterer
 from .geometry_utils import (
     azimuth,
     angular_difference,
-    measure_distance_geodesic,
-    measure_distance_euclidean,
+    measure_distance,
 )
 
 
@@ -79,7 +80,7 @@ class TrajectoryCollectionAggregator:
             Significant points
         """
         if not self.significant_points:
-            self._extract_significant_points()
+            self.significant_points = self._extract_significant_points()
         df = DataFrame(self.significant_points, columns=["geometry"])
         return GeoDataFrame(df, crs=self._crs)
 
@@ -94,7 +95,9 @@ class TrajectoryCollectionAggregator:
             points (n).
         """
         if not self.clusters:
-            self._cluster_significant_points()
+            self.clusters = PointClusterer(
+                self.significant_points, self.max_distance, self.is_latlon
+            ).get_clusters()
         df = DataFrame(
             [cluster.centroid for cluster in self.clusters],
             columns=["geometry"],
@@ -110,16 +113,17 @@ class TrajectoryCollectionAggregator:
         -------
         GeoDataFrame
             Flow lines, incl. the number of trajectories summarized in the
-            flow (weight).
+            flow (weight) and the number of unique trajectory objects summarized
+            in the flow (obj_weight).
         """
         if not self.flows:
-            self._compute_flows_between_clusters()
+            self.flows = self._compute_flows_between_clusters()
         return GeoDataFrame(self.flows, crs=self._crs)
 
     def _extract_significant_points(self):
         sig_points = []
         for traj in self.traj_collection:
-            a = _PtsExtractor(
+            a = PtsExtractor(
                 traj,
                 self.max_distance,
                 self.min_distance,
@@ -134,12 +138,12 @@ class TrajectoryCollectionAggregator:
         return sg.create_flow_lines()
 
 
-class _PtsExtractor:
+class PtsExtractor:
     def __init__(
         self, traj, max_distance, min_distance, min_stop_duration, min_angle=45
     ):
         self.traj = traj
-        self.traj_geom = traj.df[traj.get_geom_column_name()]
+        self.traj_geom = traj.df[traj.get_geom_col()]
         self.n = self.traj.df.geometry.count()
         self.max_distance = max_distance
         self.min_distance = min_distance
@@ -216,10 +220,7 @@ class _PtsExtractor:
     def distance_greater_than(self, loc1, loc2, dist):
         pt1 = self.get_pt(loc1)
         pt2 = self.get_pt(loc2)
-        if self.traj.is_latlon:
-            d = measure_distance_geodesic(pt1, pt2)
-        else:
-            d = measure_distance_euclidean(pt1, pt2)
+        d = measure_distance(pt1, pt2, self.traj.is_latlon)
         return d >= dist
 
     def get_pt(self, the_loc):
@@ -235,33 +236,42 @@ class _PtsExtractor:
 class _SequenceGenerator:
     def __init__(self, cells, traj_collection):
         self.cells = cells
-        self.cells_union = cells.geometry.unary_union
+        try:
+            self.cells_union = cells.geometry.union_all()
+        except AttributeError:
+            self.cells_union = cells.geometry.unary_union
 
         self.id_to_centroid = {i: [f, [0, 0, 0, 0, 0]] for i, f in cells.iterrows()}
-        self.sequences = {}
+        self.sequences = Counter()
+        self.sequences_obj_log = {}
         for traj in traj_collection:
             self.evaluate_trajectory(traj)
 
     def evaluate_trajectory(self, trajectory):
         this_sequence = []
         prev_cell_id = None
-        geom_name = trajectory.get_geom_column_name()
+        geom_name = trajectory.get_geom_col()
         for t, geom in trajectory.df[geom_name].items():
             nearest_id = self.get_nearest(geom)
             nearest_cell = self.id_to_centroid[nearest_id][0]
             nearest_cell_id = nearest_cell.name
-            if len(this_sequence) >= 1:
+            if this_sequence:
                 prev_cell_id = this_sequence[-1]
                 if nearest_cell_id != prev_cell_id:
-                    if (prev_cell_id, nearest_cell_id) in self.sequences:
-                        self.sequences[(prev_cell_id, nearest_cell_id)] += 1
+                    self.sequences[(prev_cell_id, nearest_cell_id)] += 1
+                    if (prev_cell_id, nearest_cell_id) in self.sequences_obj_log.keys():
+                        self.sequences_obj_log[(prev_cell_id, nearest_cell_id)].update(
+                            [trajectory.obj_id]
+                        )
                     else:
-                        self.sequences[(prev_cell_id, nearest_cell_id)] = 1
+                        self.sequences_obj_log[(prev_cell_id, nearest_cell_id)] = set(
+                            [trajectory.obj_id]
+                        )
             if nearest_cell_id != prev_cell_id:
                 # we have changed to a new cell --> up the counter
                 h = t.hour
                 self.id_to_centroid[nearest_id][1][0] += 1
-                self.id_to_centroid[nearest_id][1][int(h / 6 + 1)] += 1
+                self.id_to_centroid[nearest_id][1][h // 6 + 1] += 1
                 this_sequence.append(nearest_cell_id)
 
     def create_flow_lines(self):
@@ -269,7 +279,14 @@ class _SequenceGenerator:
         for key, value in self.sequences.items():
             p1 = self.id_to_centroid[key[0]][0].geometry
             p2 = self.id_to_centroid[key[1]][0].geometry
-            lines.append({"geometry": LineString([p1, p2]), "weight": value})
+            obj_value = len(self.sequences_obj_log[key])
+            lines.append(
+                {
+                    "geometry": LineString([p1, p2]),
+                    "weight": value,
+                    "obj_weight": obj_value,
+                }
+            )
         return lines
 
     def get_nearest(self, pt):
